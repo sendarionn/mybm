@@ -238,24 +238,22 @@ textarea {
   tab-size: 1;
 }
 
-.editing-bullets {
-  position: absolute;
-  z-index: 2;
-  top: 12px;
-  right: 12px;
-  left: 12px;
-  pointer-events: none;
-  color: #9aa0a6;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-  line-height: 1.55;
+.description-editor {
+  min-height: 210px;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
   overflow: hidden;
+  background: #fff;
 }
 
-.editing-bullet-line {
-  height: 1.55em;
-  white-space: pre;
+.description-editor:focus-within {
+  border-color: #1a73e8;
+  box-shadow: 0 0 0 2px rgb(26 115 232 / 14%);
 }
+
+.cm-mybm-indented { padding-left: calc((var(--indent-depth) - 1) * 18px) !important; }
+.cm-mybm-bullet { display: inline-block; width: 18px; color: #9aa0a6; text-align: center; }
+.cm-mybm-link { color: #1a73e8; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 
 .description-preview {
   min-height: 210px;
@@ -349,6 +347,7 @@ textarea {
   .result-action:hover, .result-action:focus-visible { background: #3c4043; color: #8ab4f8; }
   .description-link { color: #8ab4f8; text-decoration-color: rgb(138 180 248 / 45%); }
   .title-editor, .editable-url.editing { background: #292a2d; }
+  .description-editor, .description-editor .cm-editor { background: #292a2d; color: #e8eaed; }
   .divider { background: #3c4043; }
   .link-chip { background: #394457; color: #8ab4f8; }
 }

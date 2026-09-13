@@ -12,6 +12,7 @@ import {
   searchBookmarks,
   shouldInsertIndent
 } from "../core.mjs";
+import { describeEditorLine } from "../editor-model.mjs";
 
 const bookmarks = [
   { id: "1", title: "ChatGPT", url: "https://chatgpt.com/", dateAdded: 100 },
@@ -98,6 +99,22 @@ test("説明文の行頭空白を箇条書き階層として解析する", () =>
     { depth: 1, prefix: "\t", text: "[Google日本語入力]" },
     { depth: 2, prefix: "　　", text: "変換エンジン" }
   ]);
+});
+
+test("初期表示時からインデント行に箇条書き装飾を生成する", () => {
+  assert.deepEqual(describeEditorLine("  [Mozc]", true), {
+    bullet: true,
+    depth: 2,
+    prefixLength: 2,
+    links: []
+  });
+});
+
+test("選択行だけリンク記法を表示する", () => {
+  assert.deepEqual(describeEditorLine(" [Mozc]", false).links, [
+    { from: 1, to: 7, label: "Mozc" }
+  ]);
+  assert.deepEqual(describeEditorLine(" [Mozc]", true).links, []);
 });
 
 test("javascript URLをブックマークレットとして判定してコードを取り出す", () => {

@@ -31,11 +31,11 @@
         </header>
         <div class="divider"></div>
         <div id="description-area">
-          <label class="description-label" for="description">説明</label>
+          <div class="description-label">説明</div>
           <div id="editor-surface" class="editor-surface">
             <div id="description-preview" class="description-preview" tabindex="0"></div>
-            <div id="editing-bullets" class="editing-bullets" aria-hidden="true" hidden></div>
             <textarea id="description" rows="10" placeholder="[リンク] と行頭の空白を利用できます" spellcheck="false" hidden></textarea>
+            <div id="description-editor" class="description-editor" hidden></div>
           </div>
         </div>
         <section class="links-section" aria-labelledby="links-heading">
@@ -45,6 +45,6 @@
         <p id="save-status" class="save-status" role="status"></p>
       </section>
     </main>
-    <script type="module" src="popup.js"></script>
+    <script type="module" src="dist/popup.js"></script>
   </body>
 </html>

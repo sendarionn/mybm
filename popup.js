@@ -7,9 +7,9 @@ import {
   parseDescriptionLines,
   resolveLinkTarget,
   searchBookmarks,
-  shouldInsertIndent,
   targetKey
 } from "./core.mjs";
+import { createDescriptionEditor } from "./editor.mjs";
 
 const elements = {
   home: document.querySelector("#app-title"),
@@ -26,7 +26,7 @@ const elements = {
   descriptionArea: document.querySelector("#description-area"),
   editorSurface: document.querySelector("#editor-surface"),
   descriptionPreview: document.querySelector("#description-preview"),
-  editingBullets: document.querySelector("#editing-bullets"),
+  descriptionEditor: document.querySelector("#description-editor"),
   description: document.querySelector("#description"),
   links: document.querySelector("#links"),
   saveStatus: document.querySelector("#save-status")
@@ -40,7 +40,7 @@ let navigationStack = [];
 let saveTimer = null;
 let saving = false;
 let saveAgain = false;
-const inputDiagnostics = [];
+let descriptionEditor = null;
 
 async function loadData() {
   const [tree, stored] = await Promise.all([
@@ -226,33 +226,34 @@ function renderDescription() {
   }
 }
 
-function renderEditingBullets() {
-  elements.editingBullets.replaceChildren();
-  for (const value of parseDescriptionLines(elements.description.value)) {
-    const line = document.createElement("div");
-    line.className = "editing-bullet-line";
-    if (value.depth && value.text) {
-      line.textContent = `${" ".repeat(Math.max(0, value.depth - 1))}•`;
-    }
-    elements.editingBullets.append(line);
-  }
-  elements.editingBullets.style.transform = `translateY(-${elements.description.scrollTop}px)`;
+function ensureDescriptionEditor() {
+  if (descriptionEditor) return descriptionEditor;
+  descriptionEditor = createDescriptionEditor(elements.descriptionEditor, {
+    onChange(value) {
+      elements.description.value = value;
+      renderLinks();
+      scheduleSave();
+    },
+    onLink: followLink
+  });
+  return descriptionEditor;
 }
 
 function startEditing(lineIndex = null) {
   if (!selectedBookmark) return;
   elements.editorSurface.classList.add("editing");
   elements.descriptionPreview.hidden = true;
-  elements.editingBullets.hidden = false;
-  elements.description.hidden = false;
-  renderEditingBullets();
-  elements.description.focus();
+  elements.description.hidden = true;
+  elements.descriptionEditor.hidden = false;
+  const editor = ensureDescriptionEditor();
+  editor.setValue(elements.description.value);
+  let offset = null;
   if (lineIndex !== null) {
     const rows = elements.description.value.split("\n");
-    const offset = rows.slice(0, lineIndex).reduce((sum, row) => sum + row.length + 1, 0)
+    offset = rows.slice(0, lineIndex).reduce((sum, row) => sum + row.length + 1, 0)
       + (rows[lineIndex]?.length || 0);
-    elements.description.setSelectionRange(offset, offset);
   }
+  requestAnimationFrame(() => editor.focus(offset));
 }
 
 async function finishEditing() {
@@ -261,7 +262,7 @@ async function finishEditing() {
   elements.editorSurface.classList.remove("editing");
   renderDescription();
   elements.description.hidden = true;
-  elements.editingBullets.hidden = true;
+  elements.descriptionEditor.hidden = true;
   elements.descriptionPreview.hidden = false;
 }
 
@@ -278,18 +279,19 @@ function openBookmark(bookmark, edit = false) {
   elements.url.hidden = false;
   elements.descriptionArea.hidden = false;
   elements.description.value = metadata[bookmark.id]?.description || "";
+  const editor = ensureDescriptionEditor();
+  editor.setValue(elements.description.value);
   elements.saveStatus.textContent = "";
   elements.editorSurface.classList.toggle("editing", edit);
   renderDescription();
   renderLinks();
   elements.listView.hidden = true;
   elements.detailView.hidden = false;
-  elements.description.hidden = !edit;
-  elements.editingBullets.hidden = !edit;
+  elements.description.hidden = true;
+  elements.descriptionEditor.hidden = !edit;
   elements.descriptionPreview.hidden = edit;
   if (edit) {
-    renderEditingBullets();
-    elements.description.focus();
+    requestAnimationFrame(() => editor.focus());
   }
 }
 
@@ -465,26 +467,6 @@ function scheduleSave() {
   }, 500);
 }
 
-function recordBracketInput(event) {
-  const value = elements.description.value;
-  if (!/[\[\]]/.test(event.data || "") && !/[\[\]]$/.test(value)) return;
-  const selectionStart = elements.description.selectionStart;
-  const contextStart = Math.max(0, selectionStart - 16);
-  const contextEnd = Math.min(value.length, selectionStart + 16);
-  const entry = {
-    type: event.type,
-    inputType: event.inputType || null,
-    data: event.data ?? null,
-    isComposing: Boolean(event.isComposing),
-    context: value.slice(contextStart, contextEnd),
-    selectionStart,
-    selectionEnd: elements.description.selectionEnd
-  };
-  inputDiagnostics.push(entry);
-  if (inputDiagnostics.length > 30) inputDiagnostics.shift();
-  console.debug("mybm bracket input", entry);
-}
-
 async function flushSave() {
   if (!saveTimer) return;
   clearTimeout(saveTimer);
@@ -541,29 +523,6 @@ elements.descriptionPreview.addEventListener("click", (event) => {
 elements.descriptionPreview.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.target.closest(".description-link")) startEditing();
 });
-for (const eventName of ["beforeinput", "compositionstart", "compositionupdate", "compositionend"]) {
-  elements.description.addEventListener(eventName, recordBracketInput);
-}
-elements.description.addEventListener("input", (event) => {
-  recordBracketInput(event);
-  renderEditingBullets();
-  renderLinks();
-  scheduleSave();
-});
-elements.description.addEventListener("scroll", renderEditingBullets);
-elements.description.addEventListener("keydown", (event) => {
-  if (!shouldInsertIndent(event)) return;
-  event.preventDefault();
-  const start = elements.description.selectionStart;
-  const end = elements.description.selectionEnd;
-  elements.description.setRangeText("\t", start, end, "end");
-  elements.description.dispatchEvent(new InputEvent("input", {
-    bubbles: true,
-    inputType: "insertText",
-    data: "\t"
-  }));
-});
-elements.description.addEventListener("blur", finishEditing);
 for (const event of [
   chrome.bookmarks.onCreated,
   chrome.bookmarks.onChanged,
