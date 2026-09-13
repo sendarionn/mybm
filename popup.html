@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>mybm</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main id="app">
+      <header class="app-header">
+        <button id="app-title" class="home-button" type="button" aria-label="mybmのホームへ戻る">mybm</button>
+      </header>
+      <section id="list-view" aria-labelledby="app-title">
+        <div class="search-wrap">
+          <input id="search" type="search" placeholder="検索..." autocomplete="off" aria-label="ブックマークを検索">
+        </div>
+        <h2 id="result-heading">最近追加したブックマーク</h2>
+        <div id="status" class="status" role="status"></div>
+        <ul id="results" class="results" aria-labelledby="result-heading"></ul>
+      </section>
+
+      <section id="detail-view" hidden aria-labelledby="detail-title">
+        <header class="detail-header">
+          <button id="back" class="icon-button" type="button" aria-label="一覧へ戻る">←</button>
+          <div class="bookmark-identity">
+            <h1 id="detail-title" class="editable-title" tabindex="0" title="クリックしてタイトルを編集"></h1>
+            <input id="title-editor" class="title-editor" type="text" aria-label="ブックマークのタイトル" hidden>
+            <input id="detail-url" class="editable-url" type="text" aria-label="ブックマークのURL" title="クリックしてURLを編集" readonly>
+          </div>
+        </header>
+        <div class="divider"></div>
+        <div id="description-area">
+          <label class="description-label" for="description">説明</label>
+          <div id="editor-surface" class="editor-surface">
+            <div id="description-preview" class="description-preview" tabindex="0"></div>
+            <div id="editing-bullets" class="editing-bullets" aria-hidden="true" hidden></div>
+            <textarea id="description" rows="10" placeholder="[リンク] と行頭の空白を利用できます" spellcheck="false" hidden></textarea>
+          </div>
+        </div>
+        <section class="links-section" aria-labelledby="links-heading">
+          <h2 id="links-heading">Links</h2>
+          <div id="links" class="links" aria-live="polite"></div>
+        </section>
+        <p id="save-status" class="save-status" role="status"></p>
+      </section>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

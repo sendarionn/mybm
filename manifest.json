@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "mybm",
+  "version": "0.1.0",
+  "minimum_chrome_version": "135",
+  "description": "Chromeブックマークに検索、説明、リンク構造を追加します",
+  "permissions": ["bookmarks", "storage", "userScripts"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "mybm",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  }
+}
