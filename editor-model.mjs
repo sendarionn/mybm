@@ -14,3 +14,10 @@ export function describeEditorLine(text, active) {
     links
   };
 }
+
+export function linkCompletionInsertion(label, nextCharacter) {
+  return {
+    insert: nextCharacter === "]" ? label : `${label}]`,
+    movePastExistingBracket: nextCharacter === "]"
+  };
+}

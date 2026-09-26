@@ -2,6 +2,7 @@ import {
   extractLinks,
   flattenBookmarks,
   buildLinkGraph,
+  buildLinkSuggestions,
   bookmarkletSource,
   isBookmarkletUrl,
   parseDescriptionLines,
@@ -230,6 +231,17 @@ function renderDescription() {
 function ensureDescriptionEditor() {
   if (descriptionEditor) return descriptionEditor;
   descriptionEditor = createDescriptionEditor(elements.descriptionEditor, {
+    getLinkSuggestions() {
+      const currentMetadata = { ...metadata };
+      if (selectedBookmark) {
+        currentMetadata[selectedBookmark.id] = {
+          bookmarkId: selectedBookmark.id,
+          description: elements.description.value,
+          updatedAt: Date.now()
+        };
+      }
+      return buildLinkSuggestions(bookmarks, currentMetadata);
+    },
     onChange(value) {
       elements.description.value = value;
       renderLinks();

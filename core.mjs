@@ -30,6 +30,24 @@ export function extractLinks(description = "") {
   return links;
 }
 
+export function buildLinkSuggestions(bookmarks, metadata) {
+  const suggestions = [];
+  const seen = new Set();
+  const add = (label, detail) => {
+    const value = label?.trim();
+    const key = normalize(value);
+    if (!value || seen.has(key)) return;
+    seen.add(key);
+    suggestions.push({ label: value, detail });
+  };
+
+  for (const bookmark of bookmarks) add(bookmark.title, "ブックマーク");
+  for (const value of Object.values(metadata)) {
+    for (const link of extractLinks(value?.description || "")) add(link, "リンク");
+  }
+  return suggestions;
+}
+
 export function parseDescriptionLines(description = "") {
   return description.split("\n").map((line) => {
     const prefix = line.match(/^[ \t　]+/u)?.[0] || "";

@@ -7,6 +7,7 @@ import {
   isImeKeyEvent,
   isBookmarkletUrl,
   bookmarkletSource,
+  buildLinkSuggestions,
   buildOmniboxSuggestions,
   omniboxBookmarkContent,
   parseOmniboxBookmarkContent,
@@ -16,7 +17,7 @@ import {
   searchBookmarks,
   shouldInsertIndent
 } from "../core.mjs";
-import { describeEditorLine } from "../editor-model.mjs";
+import { describeEditorLine, linkCompletionInsertion } from "../editor-model.mjs";
 
 const bookmarks = [
   { id: "1", title: "ChatGPT", url: "https://chatgpt.com/", dateAdded: 100 },
@@ -47,6 +48,20 @@ test("説明文とリンク文字列を検索する", () => {
   const metadata = { "1": { description: "[生成AI]のサービス\n [OpenAI]" } };
   assert.deepEqual(searchBookmarks(bookmarks, metadata, "生成AI").map(({ id }) => id), ["1"]);
   assert.deepEqual(searchBookmarks(bookmarks, metadata, "openai").map(({ id }) => id), ["1"]);
+});
+
+test("リンク入力候補をブックマーク名と既存リンクから生成する", () => {
+  const metadata = {
+    "1": { description: "[生成AI]\n[ChatGPT]" },
+    "2": { description: "[日本語入力]" }
+  };
+  assert.deepEqual(buildLinkSuggestions(bookmarks, metadata), [
+    { label: "ChatGPT", detail: "ブックマーク" },
+    { label: "Cosense", detail: "ブックマーク" },
+    { label: "my input method", detail: "ブックマーク" },
+    { label: "生成AI", detail: "リンク" },
+    { label: "日本語入力", detail: "リンク" }
+  ]);
 });
 
 test("完全一致と前方一致を部分一致より優先する", () => {
@@ -149,6 +164,17 @@ test("選択行だけリンク記法を表示する", () => {
     { from: 1, to: 7, label: "Mozc" }
   ]);
   assert.deepEqual(describeEditorLine(" [Mozc]", true).links, []);
+});
+
+test("リンク候補確定時に閉じ括弧を重複させない", () => {
+  assert.deepEqual(linkCompletionInsertion("Mozc", ""), {
+    insert: "Mozc]",
+    movePastExistingBracket: false
+  });
+  assert.deepEqual(linkCompletionInsertion("Mozc", "]"), {
+    insert: "Mozc",
+    movePastExistingBracket: true
+  });
 });
 
 test("javascript URLをブックマークレットとして判定してコードを取り出す", () => {

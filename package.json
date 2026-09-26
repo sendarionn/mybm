@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild popup.js --bundle --format=esm --outfile=dist/popup.js",
+    "build": "esbuild popup.js --bundle --format=esm --minify-whitespace --outfile=dist/popup.js",
     "test": "node --test"
   },
   "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/state": "^6.7.4",
     "@codemirror/view": "^6.43.11",
     "esbuild": "^0.28.2"

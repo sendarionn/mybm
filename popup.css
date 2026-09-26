@@ -255,6 +255,28 @@ textarea {
 .cm-mybm-bullet { display: inline-block; width: 18px; color: #9aa0a6; text-align: center; }
 .cm-mybm-link { color: #1a73e8; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 
+.cm-tooltip-autocomplete {
+  max-width: 360px;
+  border: 1px solid #dadce0 !important;
+  border-radius: 7px;
+  overflow: hidden;
+  background: #fff !important;
+  color: #202124 !important;
+  box-shadow: 0 4px 12px rgb(60 64 67 / 20%);
+}
+
+.cm-tooltip-autocomplete > ul {
+  max-height: 180px !important;
+  background: #fff !important;
+  color: #202124 !important;
+  font-family: inherit;
+}
+
+.cm-tooltip-autocomplete > ul > li { padding: 5px 9px; background: #fff; color: #202124; }
+.cm-tooltip-autocomplete > ul > li[aria-selected] { background: #e8f0fe; color: #174ea6; }
+.cm-completionLabel { color: inherit; }
+.cm-completionDetail { margin-left: 12px; color: #80868b; font-size: 11px; }
+
 .description-preview {
   min-height: 210px;
   padding: 11px;
@@ -348,6 +370,10 @@ textarea {
   .description-link { color: #8ab4f8; text-decoration-color: rgb(138 180 248 / 45%); }
   .title-editor, .editable-url.editing { background: #292a2d; }
   .description-editor, .description-editor .cm-editor { background: #292a2d; color: #e8eaed; }
+  .cm-tooltip-autocomplete { border-color: #5f6368 !important; background: #292a2d !important; color: #e8eaed !important; }
+  .cm-tooltip-autocomplete > ul { background: #292a2d !important; color: #e8eaed !important; }
+  .cm-tooltip-autocomplete > ul > li { background: #292a2d; color: #e8eaed; }
+  .cm-tooltip-autocomplete > ul > li[aria-selected] { background: #394457; color: #8ab4f8; }
   .divider { background: #3c4043; }
   .link-chip { background: #394457; color: #8ab4f8; }
 }

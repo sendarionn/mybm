@@ -1,6 +1,11 @@
 import { EditorState } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
-import { describeEditorLine } from "./editor-model.mjs";
+import {
+  acceptCompletion,
+  autocompletion,
+  completionStatus
+} from "@codemirror/autocomplete";
+import { describeEditorLine, linkCompletionInsertion } from "./editor-model.mjs";
 
 class BulletWidget extends WidgetType {
   toDOM() {
@@ -39,8 +44,31 @@ function buildDecorations(view) {
   return Decoration.set(values, true);
 }
 
-export function createDescriptionEditor(parent, { onChange, onLink }) {
+export function createDescriptionEditor(parent, { getLinkSuggestions, onChange, onLink }) {
   let settingValue = false;
+  const linkCompletionSource = (context) => {
+    const openLink = context.matchBefore(/\[[^\[\]\n]*$/);
+    if (!openLink) return null;
+    return {
+      from: openLink.from + 1,
+      options: getLinkSuggestions().map((suggestion) => ({
+        ...suggestion,
+        apply(view, completion, from, to) {
+          const insertion = linkCompletionInsertion(
+            completion.label,
+            view.state.doc.sliceString(to, to + 1)
+          );
+          view.dispatch({
+            changes: { from, to, insert: insertion.insert },
+            selection: {
+              anchor: from + insertion.insert.length + (insertion.movePastExistingBracket ? 1 : 0)
+            }
+          });
+        }
+      })),
+      validFor: /^[^\[\]\n]*$/
+    };
+  };
   const decorationPlugin = ViewPlugin.fromClass(class {
     constructor(view) {
       this.decorations = buildDecorations(view);
@@ -57,6 +85,7 @@ export function createDescriptionEditor(parent, { onChange, onLink }) {
     parent,
     state: EditorState.create({ extensions: [
       decorationPlugin,
+      autocompletion({ override: [linkCompletionSource] }),
       EditorView.lineWrapping,
       EditorView.contentAttributes.of({ "aria-label": "説明" }),
       EditorView.domEventHandlers({
@@ -70,6 +99,10 @@ export function createDescriptionEditor(parent, { onChange, onLink }) {
         keydown(event, currentView) {
           if (event.key !== "Tab" || event.isComposing || event.keyCode === 229) return false;
           event.preventDefault();
+          if (completionStatus(currentView.state) === "active") {
+            acceptCompletion(currentView);
+            return true;
+          }
           const range = currentView.state.selection.main;
           currentView.dispatch({
             changes: { from: range.from, to: range.to, insert: "\t" },
