@@ -12155,6 +12155,33 @@ function createDescriptionEditor(parent, { onChange, onLink }) {
   };
 }
 
+// storage.mjs
+var METADATA_SCHEMA_VERSION = 1;
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function resolveStoredMetadata(stored = {}) {
+  if (isRecord(stored.metadata)) return stored.metadata;
+  if (isRecord(stored.metadataBackup)) return stored.metadataBackup;
+  return {};
+}
+async function readMetadata(storageArea) {
+  const stored = await storageArea.get([
+    "metadata",
+    "metadataBackup",
+    "metadataSchemaVersion"
+  ]);
+  return resolveStoredMetadata(stored);
+}
+async function writeMetadata(storageArea, metadata2) {
+  if (!isRecord(metadata2)) throw new TypeError("metadata must be an object");
+  await storageArea.set({
+    metadata: metadata2,
+    metadataBackup: metadata2,
+    metadataSchemaVersion: METADATA_SCHEMA_VERSION
+  });
+}
+
 // popup.js
 var elements = {
   home: document.querySelector("#app-title"),
@@ -12186,12 +12213,12 @@ var saving = false;
 var saveAgain = false;
 var descriptionEditor = null;
 async function loadData() {
-  const [tree, stored] = await Promise.all([
+  const [tree, storedMetadata] = await Promise.all([
     chrome.bookmarks.getTree(),
-    chrome.storage.local.get("metadata")
+    readMetadata(chrome.storage.local)
   ]);
   bookmarks = flattenBookmarks(tree);
-  metadata = stored.metadata || {};
+  metadata = storedMetadata;
 }
 function displayUrl(url) {
   try {
@@ -12542,7 +12569,7 @@ async function saveDescription() {
     delete metadata[bookmarkId];
   }
   try {
-    await chrome.storage.local.set({ metadata });
+    await writeMetadata(chrome.storage.local, metadata);
     if (selectedBookmark?.id === bookmarkId) elements.saveStatus.textContent = "\u4FDD\u5B58\u6E08\u307F";
   } catch {
     if (selectedBookmark?.id === bookmarkId) elements.saveStatus.textContent = "\u672A\u4FDD\u5B58";

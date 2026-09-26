@@ -7,8 +7,12 @@ import {
   isImeKeyEvent,
   isBookmarkletUrl,
   bookmarkletSource,
+  buildOmniboxSuggestions,
+  omniboxBookmarkContent,
+  parseOmniboxBookmarkContent,
   parseDescriptionLines,
   resolveLinkTarget,
+  resolveOmniboxBookmark,
   searchBookmarks,
   shouldInsertIndent
 } from "../core.mjs";
@@ -52,6 +56,36 @@ test("完全一致と前方一致を部分一致より優先する", () => {
     { id: "c", title: "GPT", url: "https://c.example", dateAdded: 1 }
   ];
   assert.deepEqual(searchBookmarks(candidates, {}, "gpt").map(({ id }) => id), ["c", "b", "a"]);
+});
+
+test("オムニバー候補でも既存の検索順位と説明文検索を使う", () => {
+  const metadata = { "1": { description: "[生成AI]" } };
+  assert.deepEqual(buildOmniboxSuggestions(bookmarks, metadata, "生成AI", 6), [{
+    content: "mybm-bookmark:1",
+    description: "<match>ChatGPT</match> <dim>https://chatgpt.com/</dim>"
+  }]);
+});
+
+test("オムニバー候補のIDを安全に往復する", () => {
+  const content = omniboxBookmarkContent("id / 日本語");
+  assert.equal(parseOmniboxBookmarkContent(content), "id / 日本語");
+  assert.equal(parseOmniboxBookmarkContent("検索文字列"), null);
+  assert.equal(parseOmniboxBookmarkContent("mybm-bookmark:%E0%A4%A"), null);
+});
+
+test("オムニバーの候補選択と検索語確定をブックマークへ解決する", () => {
+  const metadata = { "1": { description: "[生成AI]" } };
+  assert.equal(resolveOmniboxBookmark(bookmarks, metadata, "mybm-bookmark:2")?.id, "2");
+  assert.equal(resolveOmniboxBookmark(bookmarks, metadata, "生成AI")?.id, "1");
+  assert.equal(resolveOmniboxBookmark(bookmarks, metadata, "存在しない"), null);
+});
+
+test("オムニバー候補の表示文字列をエスケープする", () => {
+  const unsafe = [{ id: "x", title: "A < B & C", url: "https://example.com/?a=1&b=2", dateAdded: 1 }];
+  assert.equal(
+    buildOmniboxSuggestions(unsafe, {}, "A")[0].description,
+    "<match>A &lt; B &amp; C</match> <dim>https://example.com/?a=1&amp;b=2</dim>"
+  );
 });
 
 test("IME変換中のEnterとTabを編集操作として扱わない", () => {

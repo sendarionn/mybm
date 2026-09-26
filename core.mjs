@@ -131,6 +131,42 @@ export function searchBookmarks(bookmarks, metadata, rawQuery) {
     .map(({ bookmark }) => bookmark);
 }
 
+const OMNIBOX_BOOKMARK_PREFIX = "mybm-bookmark:";
+
+export function omniboxBookmarkContent(bookmarkId) {
+  return `${OMNIBOX_BOOKMARK_PREFIX}${encodeURIComponent(bookmarkId)}`;
+}
+
+export function parseOmniboxBookmarkContent(content = "") {
+  if (!content.startsWith(OMNIBOX_BOOKMARK_PREFIX)) return null;
+  try {
+    return decodeURIComponent(content.slice(OMNIBOX_BOOKMARK_PREFIX.length));
+  } catch {
+    return null;
+  }
+}
+
+function escapeOmniboxDescription(value = "") {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+export function buildOmniboxSuggestions(bookmarks, metadata, query, limit = 6) {
+  return searchBookmarks(bookmarks, metadata, query).slice(0, limit).map((bookmark) => ({
+    content: omniboxBookmarkContent(bookmark.id),
+    description: `<match>${escapeOmniboxDescription(bookmark.title)}</match> <dim>${escapeOmniboxDescription(bookmark.url)}</dim>`
+  }));
+}
+
+export function resolveOmniboxBookmark(bookmarks, metadata, input) {
+  const bookmarkId = parseOmniboxBookmarkContent(input);
+  return bookmarkId
+    ? bookmarks.find(({ id }) => id === bookmarkId) || null
+    : searchBookmarks(bookmarks, metadata, input)[0] || null;
+}
+
 export function isImeKeyEvent(event) {
   return Boolean(event.isComposing || event.keyCode === 229);
 }

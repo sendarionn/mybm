@@ -10,6 +10,7 @@ import {
   targetKey
 } from "./core.mjs";
 import { createDescriptionEditor } from "./editor.mjs";
+import { readMetadata, writeMetadata } from "./storage.mjs";
 
 const elements = {
   home: document.querySelector("#app-title"),
@@ -43,12 +44,12 @@ let saveAgain = false;
 let descriptionEditor = null;
 
 async function loadData() {
-  const [tree, stored] = await Promise.all([
+  const [tree, storedMetadata] = await Promise.all([
     chrome.bookmarks.getTree(),
-    chrome.storage.local.get("metadata")
+    readMetadata(chrome.storage.local)
   ]);
   bookmarks = flattenBookmarks(tree);
-  metadata = stored.metadata || {};
+  metadata = storedMetadata;
 }
 
 function displayUrl(url) {
@@ -444,7 +445,7 @@ async function saveDescription() {
   }
 
   try {
-    await chrome.storage.local.set({ metadata });
+    await writeMetadata(chrome.storage.local, metadata);
     if (selectedBookmark?.id === bookmarkId) elements.saveStatus.textContent = "保存済み";
   } catch {
     if (selectedBookmark?.id === bookmarkId) elements.saveStatus.textContent = "未保存";
