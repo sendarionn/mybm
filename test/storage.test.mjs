@@ -41,10 +41,33 @@ test("metadataが壊れた場合はバックアップを読み込む", () => {
   assert.deepEqual(resolveStoredMetadata({ metadata: null, metadataBackup: backup }), backup);
 });
 
+test("更新時にmetadataが空でも非空のバックアップを復元する", () => {
+  const backup = { "1": { description: "更新前のメモ" } };
+  assert.deepEqual(resolveStoredMetadata({ metadata: {}, metadataBackup: backup }), backup);
+});
+
+test("利用者が全メモを削除した場合は空のmetadataを維持する", () => {
+  const backup = { "1": { description: "削除前のメモ" } };
+  assert.deepEqual(resolveStoredMetadata({
+    metadata: {},
+    metadataBackup: backup,
+    metadataEmptyIsIntentional: true
+  }), {});
+});
+
 test("保存時にmetadataとバックアップを同時更新する", async () => {
   const storage = createStorage();
   const metadata = { "2": { description: "新しいメモ" } };
   await writeMetadata(storage, metadata);
   assert.deepEqual(storage.values.metadata, metadata);
   assert.deepEqual(storage.values.metadataBackup, metadata);
+});
+
+test("全メモ削除時も非空のバックアップを保持する", async () => {
+  const backup = { "2": { description: "削除前のメモ" } };
+  const storage = createStorage({ metadata: backup, metadataBackup: backup });
+  await writeMetadata(storage, {});
+  assert.deepEqual(storage.values.metadata, {});
+  assert.deepEqual(storage.values.metadataBackup, backup);
+  assert.equal(storage.values.metadataEmptyIsIntentional, true);
 });

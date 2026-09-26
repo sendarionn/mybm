@@ -82,6 +82,78 @@ function normalize(value) {
   return (value || "").normalize("NFKC").toLocaleLowerCase().trim();
 }
 
+function normalizeWithOffsets(value = "") {
+  let text = "";
+  const offsets = [];
+  let originalOffset = 0;
+  for (const character of value) {
+    const normalized = character.normalize("NFKC").toLocaleLowerCase();
+    for (let index = 0; index < normalized.length; index += 1) {
+      offsets.push({ from: originalOffset, to: originalOffset + character.length });
+    }
+    text += normalized;
+    originalOffset += character.length;
+  }
+  return { text, offsets };
+}
+
+export function findTextMatches(value, rawQuery) {
+  const query = normalize(rawQuery);
+  if (!query) return [];
+  const normalized = normalizeWithOffsets(value);
+  const matches = [];
+  let offset = 0;
+  while (offset <= normalized.text.length - query.length) {
+    const index = normalized.text.indexOf(query, offset);
+    if (index < 0) break;
+    const first = normalized.offsets[index];
+    const last = normalized.offsets[index + query.length - 1];
+    if (first && last) matches.push({ from: first.from, to: last.to });
+    offset = index + query.length;
+  }
+  return matches;
+}
+
+export function findMatchingDescriptionLine(description, query) {
+  return description.split("\n")
+    .map((line) => line.trim())
+    .find((line) => findTextMatches(line, query).length) || "";
+}
+
+export function buildMatchContext(bookmark, metadataEntry, query, radius = 8, hideLinkSyntax = false) {
+  if (!normalize(query)) return { text: "", matches: [] };
+  const descriptionLine = findMatchingDescriptionLine(metadataEntry?.description || "", query);
+  const source = [
+    { text: bookmark.title, description: false },
+    { text: bookmark.url, description: false },
+    { text: descriptionLine, description: true }
+  ].find(({ text }) => text && findTextMatches(text, query).length);
+  if (!source) return { text: "", matches: [] };
+
+  const match = findTextMatches(source.text, query)[0];
+  const beforeCharacters = [...source.text.slice(0, match.from)];
+  const matchedText = source.text.slice(match.from, match.to);
+  const afterCharacters = [...source.text.slice(match.to)];
+  const before = beforeCharacters.slice(-radius).join("");
+  const after = afterCharacters.slice(0, radius).join("");
+  const prefix = beforeCharacters.length > radius ? "…" : "";
+  const suffix = afterCharacters.length > radius ? "…" : "";
+  let text = `${prefix}${before}${matchedText}${after}${suffix}`;
+  let from = prefix.length + before.length;
+  let to = from + matchedText.length;
+  if (source.description && hideLinkSyntax) {
+    const bracketsBeforeMatch = [...text.slice(0, from)].filter((value) => value === "[" || value === "]").length;
+    const bracketsInsideMatch = [...text.slice(from, to)].filter((value) => value === "[" || value === "]").length;
+    text = text.replaceAll("[", "").replaceAll("]", "");
+    from -= bracketsBeforeMatch;
+    to -= bracketsBeforeMatch + bracketsInsideMatch;
+  }
+  return {
+    text,
+    matches: [{ from, to }]
+  };
+}
+
 export function resolveLinkTarget(title, bookmarks) {
   const normalizedTitle = normalize(title);
   const matches = bookmarks.filter((bookmark) => normalize(bookmark.title) === normalizedTitle);
@@ -171,11 +243,33 @@ function escapeOmniboxDescription(value = "") {
     .replaceAll(">", "&gt;");
 }
 
+function formatOmniboxMatchContext(context) {
+  if (!context.text) return "—";
+  const match = context.matches[0];
+  if (!match) return escapeOmniboxDescription(context.text);
+  return [
+    escapeOmniboxDescription(context.text.slice(0, match.from)),
+    "<match>",
+    escapeOmniboxDescription(context.text.slice(match.from, match.to)),
+    "</match>",
+    escapeOmniboxDescription(context.text.slice(match.to))
+  ].join("");
+}
+
 export function buildOmniboxSuggestions(bookmarks, metadata, query, limit = 6) {
-  return searchBookmarks(bookmarks, metadata, query).slice(0, limit).map((bookmark) => ({
-    content: omniboxBookmarkContent(bookmark.id),
-    description: `<match>${escapeOmniboxDescription(bookmark.title)}</match> <dim>${escapeOmniboxDescription(bookmark.url)}</dim>`
-  }));
+  return searchBookmarks(bookmarks, metadata, query).slice(0, limit).map((bookmark) => {
+    const context = buildMatchContext(bookmark, metadata[bookmark.id], query, 8, true);
+    return {
+      content: omniboxBookmarkContent(bookmark.id),
+      description: [
+        escapeOmniboxDescription(bookmark.title),
+        "<dim>｜</dim>",
+        formatOmniboxMatchContext(context),
+        "<dim>｜</dim>",
+        `<dim>${escapeOmniboxDescription(bookmark.url)}</dim>`
+      ].join("")
+    };
+  });
 }
 
 export function resolveOmniboxBookmark(bookmarks, metadata, input) {

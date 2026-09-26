@@ -7,7 +7,10 @@ import {
   isImeKeyEvent,
   isBookmarkletUrl,
   bookmarkletSource,
+  buildMatchContext,
   buildLinkSuggestions,
+  findMatchingDescriptionLine,
+  findTextMatches,
   buildOmniboxSuggestions,
   omniboxBookmarkContent,
   parseOmniboxBookmarkContent,
@@ -50,6 +53,48 @@ test("説明文とリンク文字列を検索する", () => {
   assert.deepEqual(searchBookmarks(bookmarks, metadata, "openai").map(({ id }) => id), ["1"]);
 });
 
+test("検索語に一致した元文字列の範囲を返す", () => {
+  assert.deepEqual(findTextMatches("ChatGPTとchatgpt", "GPT"), [
+    { from: 4, to: 7 },
+    { from: 12, to: 15 }
+  ]);
+  assert.deepEqual(findTextMatches("Ｃｏｓｅｎｓｅ", "cosense"), [{ from: 0, to: 7 }]);
+  assert.equal(findMatchingDescriptionLine("概要\n [生成AI]のサービス", "生成ai"), "[生成AI]のサービス");
+});
+
+test("検索一致箇所の前後8文字を表示用に切り出す", () => {
+  assert.deepEqual(buildMatchContext(
+    { title: "長いタイトル", url: "https://example.com/abcdefghijklmnopGPTqrstuvwxyz" },
+    {},
+    "GPT"
+  ), {
+    text: "…ijklmnopGPTqrstuvwx…",
+    matches: [{ from: 9, to: 12 }]
+  });
+
+  assert.deepEqual(buildMatchContext(
+    { title: "ChatGPT", url: "https://example.com" },
+    {},
+    "GPT"
+  ), {
+    text: "ChatGPT",
+    matches: [{ from: 4, to: 7 }]
+  });
+});
+
+test("オムニバー用の説明文脈からリンク記法の括弧を除く", () => {
+  assert.deepEqual(buildMatchContext(
+    { title: "ChatGPT", url: "https://chatgpt.com" },
+    { description: "[生成AI]のサービス" },
+    "生成",
+    8,
+    true
+  ), {
+    text: "生成AIのサービス",
+    matches: [{ from: 0, to: 2 }]
+  });
+});
+
 test("リンク入力候補をブックマーク名と既存リンクから生成する", () => {
   const metadata = {
     "1": { description: "[生成AI]\n[ChatGPT]" },
@@ -77,7 +122,7 @@ test("オムニバー候補でも既存の検索順位と説明文検索を使�
   const metadata = { "1": { description: "[生成AI]" } };
   assert.deepEqual(buildOmniboxSuggestions(bookmarks, metadata, "生成AI", 6), [{
     content: "mybm-bookmark:1",
-    description: "<match>ChatGPT</match> <dim>https://chatgpt.com/</dim>"
+    description: "ChatGPT<dim>｜</dim><match>生成AI</match><dim>｜</dim><dim>https://chatgpt.com/</dim>"
   }]);
 });
 
@@ -98,8 +143,8 @@ test("オムニバーの候補選択と検索語確定をブックマークへ�
 test("オムニバー候補の表示文字列をエスケープする", () => {
   const unsafe = [{ id: "x", title: "A < B & C", url: "https://example.com/?a=1&b=2", dateAdded: 1 }];
   assert.equal(
-    buildOmniboxSuggestions(unsafe, {}, "A")[0].description,
-    "<match>A &lt; B &amp; C</match> <dim>https://example.com/?a=1&amp;b=2</dim>"
+    buildOmniboxSuggestions(unsafe, {}, "<")[0].description,
+    "A &lt; B &amp; C<dim>｜</dim>A <match>&lt;</match> B &amp; C<dim>｜</dim><dim>https://example.com/?a=1&amp;b=2</dim>"
   );
 });
 
