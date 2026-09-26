@@ -251,6 +251,9 @@ textarea {
   box-shadow: 0 0 0 2px rgb(26 115 232 / 14%);
 }
 
+.description-editor .cm-content { caret-color: #1a73e8; }
+.description-editor .cm-cursor { border-left-color: #1a73e8; }
+
 .cm-mybm-indented { padding-left: calc((var(--indent-depth) - 1) * 18px) !important; }
 .cm-mybm-bullet { display: inline-block; width: 18px; color: #9aa0a6; text-align: center; }
 .cm-mybm-link { color: #1a73e8; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
@@ -370,6 +373,8 @@ textarea {
   .description-link { color: #8ab4f8; text-decoration-color: rgb(138 180 248 / 45%); }
   .title-editor, .editable-url.editing { background: #292a2d; }
   .description-editor, .description-editor .cm-editor { background: #292a2d; color: #e8eaed; }
+  .description-editor .cm-content { caret-color: #8ab4f8; }
+  .description-editor .cm-cursor { border-left-color: #8ab4f8; }
   .cm-tooltip-autocomplete { border-color: #5f6368 !important; background: #292a2d !important; color: #e8eaed !important; }
   .cm-tooltip-autocomplete > ul { background: #292a2d !important; color: #e8eaed !important; }
   .cm-tooltip-autocomplete > ul > li { background: #292a2d; color: #e8eaed; }
