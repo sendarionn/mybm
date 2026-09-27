@@ -1,11 +1,20 @@
 import { EditorState } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
+import { Decoration, EditorView, keymap, ViewPlugin, WidgetType } from "@codemirror/view";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap
+} from "@codemirror/commands";
 import {
   acceptCompletion,
   autocompletion,
   completionStatus
 } from "@codemirror/autocomplete";
-import { describeEditorLine, linkCompletionInsertion } from "./editor-model.mjs";
+import {
+  describeEditorLine,
+  linkCompletionInsertion,
+  resolveLinkWrapAfterInput
+} from "./editor-model.mjs";
 
 class BulletWidget extends WidgetType {
   toDOM() {
@@ -46,6 +55,37 @@ function buildDecorations(view) {
 
 export function createDescriptionEditor(parent, { getLinkSuggestions, onChange, onLink }) {
   let settingValue = false;
+  let pendingLinkWrap = null;
+  let pendingLinkWrapTimer = null;
+  const finishPendingLinkWrap = (currentView) => {
+    if (!pendingLinkWrap) return;
+    const resolution = resolveLinkWrapAfterInput(
+      pendingLinkWrap.documentText,
+      currentView.state.doc.toString(),
+      pendingLinkWrap.from,
+      pendingLinkWrap.to
+    );
+    if (!resolution) return;
+    pendingLinkWrap = null;
+    clearTimeout(pendingLinkWrapTimer);
+    pendingLinkWrapTimer = null;
+    currentView.dispatch({
+      changes: {
+        from: resolution.from,
+        to: resolution.to,
+        insert: resolution.insert
+      },
+      selection: { anchor: resolution.cursor }
+    });
+  };
+  const schedulePendingLinkWrap = (currentView) => {
+    clearTimeout(pendingLinkWrapTimer);
+    pendingLinkWrapTimer = setTimeout(() => {
+      finishPendingLinkWrap(currentView);
+      pendingLinkWrap = null;
+      pendingLinkWrapTimer = null;
+    }, 0);
+  };
   const linkCompletionSource = (context) => {
     const openLink = context.matchBefore(/\[[^\[\]\n]*$/);
     if (!openLink) return null;
@@ -85,10 +125,27 @@ export function createDescriptionEditor(parent, { getLinkSuggestions, onChange, 
     parent,
     state: EditorState.create({ extensions: [
       decorationPlugin,
+      history(),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
       autocompletion({ override: [linkCompletionSource] }),
       EditorView.lineWrapping,
       EditorView.contentAttributes.of({ "aria-label": "説明" }),
       EditorView.domEventHandlers({
+        beforeinput(event, currentView) {
+          const range = currentView.state.selection.main;
+          if (event.data !== "[") return false;
+          pendingLinkWrap ??= {
+            documentText: currentView.state.doc.toString(),
+            from: range.from,
+            to: range.to
+          };
+          if (!event.isComposing) schedulePendingLinkWrap(currentView);
+          return false;
+        },
+        compositionend(_event, currentView) {
+          schedulePendingLinkWrap(currentView);
+          return false;
+        },
         click(event) {
           const link = event.target.closest?.(".cm-mybm-link")?.dataset.link;
           if (!link) return false;
@@ -97,7 +154,8 @@ export function createDescriptionEditor(parent, { getLinkSuggestions, onChange, 
           return true;
         },
         keydown(event, currentView) {
-          if (event.key !== "Tab" || event.isComposing || event.keyCode === 229) return false;
+          if (event.isComposing || event.keyCode === 229) return false;
+          if (event.key !== "Tab") return false;
           event.preventDefault();
           if (completionStatus(currentView.state) === "active") {
             acceptCompletion(currentView);

@@ -20,7 +20,12 @@ import {
   searchBookmarks,
   shouldInsertIndent
 } from "../core.mjs";
-import { describeEditorLine, linkCompletionInsertion } from "../editor-model.mjs";
+import {
+  describeEditorLine,
+  linkCompletionInsertion,
+  resolveLinkWrapAfterInput,
+  wrapSelectionAsLink
+} from "../editor-model.mjs";
 
 const bookmarks = [
   { id: "1", title: "ChatGPT", url: "https://chatgpt.com/", dateAdded: 100 },
@@ -220,6 +225,56 @@ test("リンク候補確定時に閉じ括弧を重複させない", () => {
     insert: "Mozc",
     movePastExistingBracket: true
   });
+});
+
+test("選択文字列をリンク記法で囲む", () => {
+  assert.deepEqual(wrapSelectionAsLink("生成AIのサービス", 0, 4), {
+    from: 0,
+    to: 4,
+    insert: "[生成AI]",
+    cursor: 6
+  });
+  assert.equal(wrapSelectionAsLink("生成AI", 2, 2), null);
+  assert.equal(wrapSelectionAsLink("生成\nAI", 0, 5), null);
+});
+
+test("IM確定後の左角括弧置換を選択文字列のリンクへ正規化する", () => {
+  assert.deepEqual(resolveLinkWrapAfterInput("Codexも利用中", "[も利用中", 0, 5), {
+    from: 0,
+    to: 1,
+    insert: "[Codex]",
+    cursor: 7
+  });
+  assert.deepEqual(resolveLinkWrapAfterInput("Codexも利用中", "[[も利用中", 0, 5), {
+    from: 0,
+    to: 2,
+    insert: "[Codex]",
+    cursor: 7
+  });
+  assert.deepEqual(resolveLinkWrapAfterInput("Codexも利用中", "[[]も利用中", 0, 5), {
+    from: 0,
+    to: 3,
+    insert: "[Codex]",
+    cursor: 7
+  });
+  assert.equal(resolveLinkWrapAfterInput("Codexも利用中", "Aも利用中", 0, 5), null);
+});
+
+test("myimが未選択位置へ生成した重複括弧だけを正規化する", () => {
+  assert.deepEqual(resolveLinkWrapAfterInput("利用中", "[[]利用中", 0, 0), {
+    from: 0,
+    to: 3,
+    insert: "[]",
+    cursor: 1
+  });
+  assert.deepEqual(resolveLinkWrapAfterInput("利用中", "[[利用中", 0, 0), {
+    from: 0,
+    to: 2,
+    insert: "[",
+    cursor: 1
+  });
+  assert.equal(resolveLinkWrapAfterInput("利用中", "[利用中", 0, 0), null);
+  assert.equal(resolveLinkWrapAfterInput("利用中", "[]利用中", 0, 0), null);
 });
 
 test("javascript URLをブックマークレットとして判定してコードを取り出す", () => {
