@@ -187,6 +187,31 @@ export function buildLinkGraph(bookmarks, metadata) {
   return new Map([...relations].map(([key, labels]) => [key, [...labels]]));
 }
 
+export function buildLinksForTarget(bookmarks, metadata, target) {
+  const selectedKey = targetKey(target);
+  const links = new Set();
+  const bookmarksByTitle = new Map();
+  for (const bookmark of bookmarks) {
+    const key = normalize(bookmark.title);
+    const matches = bookmarksByTitle.get(key) || [];
+    matches.push(bookmark);
+    bookmarksByTitle.set(key, matches);
+  }
+
+  for (const bookmark of bookmarks) {
+    const sourceKey = `bookmark:${bookmark.id}`;
+    for (const label of extractLinks(metadata[bookmark.id]?.description || "")) {
+      const matches = bookmarksByTitle.get(normalize(label)) || [];
+      const destinationKey = matches.length === 1
+        ? `bookmark:${matches[0].id}`
+        : `virtual:${normalize(label)}`;
+      if (sourceKey === selectedKey) links.add(label);
+      if (destinationKey === selectedKey) links.add(bookmark.title);
+    }
+  }
+  return [...links];
+}
+
 function fieldScore(value, query, base) {
   const text = normalize(value);
   if (!text) return null;

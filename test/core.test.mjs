@@ -4,6 +4,7 @@ import {
   extractLinks,
   flattenBookmarks,
   buildLinkGraph,
+  buildLinksForTarget,
   isImeKeyEvent,
   isBookmarkletUrl,
   bookmarkletSource,
@@ -179,6 +180,24 @@ test("順リンクと逆リンクを区別せずLinksへまとめる", () => {
   assert.deepEqual(graph.get("bookmark:a"), ["B", "仮想", "C"]);
   assert.deepEqual(graph.get("bookmark:b"), ["A"]);
   assert.deepEqual(graph.get("virtual:仮想"), ["A"]);
+});
+
+test("対象ノードのLinksだけを全体グラフと同じ結果で生成する", () => {
+  const linkedBookmarks = [
+    { id: "a", title: "A", url: "https://a.example", dateAdded: 3 },
+    { id: "b", title: "B", url: "https://b.example", dateAdded: 2 },
+    { id: "c", title: "C", url: "https://c.example", dateAdded: 1 }
+  ];
+  const linkedMetadata = {
+    a: { description: "[B]\n[仮想]" },
+    c: { description: "[A]" }
+  };
+  const target = { type: "bookmark", bookmark: linkedBookmarks[0] };
+
+  assert.deepEqual(
+    buildLinksForTarget(linkedBookmarks, linkedMetadata, target),
+    buildLinkGraph(linkedBookmarks, linkedMetadata).get("bookmark:a")
+  );
 });
 
 test("リンク名から一意なブックマークと仮想ノードを解決する", () => {

@@ -1,17 +1,18 @@
 import {
   extractLinks,
   flattenBookmarks,
-  buildLinkGraph,
+  buildLinksForTarget,
   buildLinkSuggestions,
   bookmarkletSource,
   isBookmarkletUrl,
   parseDescriptionLines,
   resolveLinkTarget,
-  searchBookmarks,
-  targetKey
+  searchBookmarks
 } from "./core.mjs";
 import { createDescriptionEditor } from "./editor.mjs";
 import { readMetadata, writeMetadata } from "./storage.mjs";
+
+const RESULT_RENDER_BATCH_SIZE = 100;
 
 const elements = {
   home: document.querySelector("#app-title"),
@@ -43,6 +44,7 @@ let saveTimer = null;
 let saving = false;
 let saveAgain = false;
 let descriptionEditor = null;
+let resultRenderGeneration = 0;
 
 async function loadData() {
   const [tree, storedMetadata] = await Promise.all([
@@ -98,46 +100,56 @@ async function openBookmarkUrl(bookmark) {
 }
 
 function renderResults() {
+  const generation = ++resultRenderGeneration;
   const query = elements.search.value;
   const matches = searchBookmarks(bookmarks, metadata, query);
   elements.heading.textContent = query.trim() ? "検索結果" : "最近追加したブックマーク";
   elements.results.replaceChildren();
   elements.status.textContent = matches.length ? "" : "該当するブックマークがありません";
-
-  for (const bookmark of matches) {
-    const item = document.createElement("li");
-    const row = document.createElement("div");
-    const identity = document.createElement("div");
-    const actions = document.createElement("div");
-    const title = document.createElement("span");
-    const url = document.createElement("span");
-    row.className = "result-row";
-    identity.className = "result-identity";
-    actions.className = "result-actions";
-    title.className = "result-title";
-    url.className = "result-url";
-    title.textContent = bookmark.title;
-    url.textContent = displayUrl(bookmark.url);
-    identity.append(title, url);
-    actions.append(
-      createIconButton("edit", `${bookmark.title}の説明を編集`, () => {
-        navigationStack = [];
-        openBookmark(bookmark, false);
-      }),
-      createIconButton("open", isBookmarkletUrl(bookmark.url)
-        ? `${bookmark.title}を現在のタブで実行`
-        : `${bookmark.title}を新しいタブで開く`, async () => {
-        try {
-          await openBookmarkUrl(bookmark);
-        } catch (error) {
-          elements.status.textContent = `実行できませんでした: ${error.message}`;
-        }
-      })
-    );
-    row.append(identity, actions);
-    item.append(row);
-    elements.results.append(item);
-  }
+  let offset = 0;
+  const appendBatch = () => {
+    if (generation !== resultRenderGeneration) return;
+    const fragment = document.createDocumentFragment();
+    const end = Math.min(offset + RESULT_RENDER_BATCH_SIZE, matches.length);
+    for (; offset < end; offset += 1) {
+      const bookmark = matches[offset];
+      const item = document.createElement("li");
+      const row = document.createElement("div");
+      const identity = document.createElement("div");
+      const actions = document.createElement("div");
+      const title = document.createElement("span");
+      const url = document.createElement("span");
+      row.className = "result-row";
+      identity.className = "result-identity";
+      actions.className = "result-actions";
+      title.className = "result-title";
+      url.className = "result-url";
+      title.textContent = bookmark.title;
+      url.textContent = displayUrl(bookmark.url);
+      identity.append(title, url);
+      actions.append(
+        createIconButton("edit", `${bookmark.title}の説明を編集`, () => {
+          navigationStack = [];
+          openBookmark(bookmark, false);
+        }),
+        createIconButton("open", isBookmarkletUrl(bookmark.url)
+          ? `${bookmark.title}を現在のタブで実行`
+          : `${bookmark.title}を新しいタブで開く`, async () => {
+          try {
+            await openBookmarkUrl(bookmark);
+          } catch (error) {
+            elements.status.textContent = `実行できませんでした: ${error.message}`;
+          }
+        })
+      );
+      row.append(identity, actions);
+      item.append(row);
+      fragment.append(item);
+    }
+    elements.results.append(fragment);
+    if (offset < matches.length) requestIdleCallback(appendBatch, { timeout: 100 });
+  };
+  appendBatch();
 }
 
 function renderLinks() {
@@ -150,8 +162,7 @@ function renderLinks() {
       updatedAt: Date.now()
     };
   }
-  const graph = buildLinkGraph(bookmarks, previewMetadata);
-  const links = graph.get(targetKey(selectedTarget)) || [];
+  const links = buildLinksForTarget(bookmarks, previewMetadata, selectedTarget);
   elements.links.replaceChildren();
   if (!links.length) {
     const empty = document.createElement("span");
@@ -280,6 +291,7 @@ async function finishEditing() {
 }
 
 function openBookmark(bookmark, edit = false) {
+  resultRenderGeneration += 1;
   selectedTarget = { type: "bookmark", bookmark };
   selectedBookmark = bookmark;
   elements.title.textContent = bookmark.title;
@@ -292,8 +304,6 @@ function openBookmark(bookmark, edit = false) {
   elements.url.hidden = false;
   elements.descriptionArea.hidden = false;
   elements.description.value = metadata[bookmark.id]?.description || "";
-  const editor = ensureDescriptionEditor();
-  editor.setValue(elements.description.value);
   elements.saveStatus.textContent = "";
   elements.editorSurface.classList.toggle("editing", edit);
   renderDescription();
@@ -304,11 +314,14 @@ function openBookmark(bookmark, edit = false) {
   elements.descriptionEditor.hidden = !edit;
   elements.descriptionPreview.hidden = edit;
   if (edit) {
+    const editor = ensureDescriptionEditor();
+    editor.setValue(elements.description.value);
     requestAnimationFrame(() => editor.focus());
   }
 }
 
 function openVirtual(target) {
+  resultRenderGeneration += 1;
   selectedTarget = target;
   selectedBookmark = null;
   elements.title.textContent = target.title;
