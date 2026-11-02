@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "esbuild popup.js --bundle --format=esm --minify-whitespace --outfile=dist/popup.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:chrome": "node scripts/chrome-smoke.mjs"
   },
   "devDependencies": {
     "@codemirror/autocomplete": "^6.20.3",

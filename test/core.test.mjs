@@ -474,6 +474,14 @@ test("連続入力は直前の送信内容が保存済みならrevision差を許
   assert.equal(hasMetadataSaveConflict(current, 2, "別の内容"), false);
 });
 
+test("新規ノードの初回メモ保存でnullの既存エントリを受け入れる", () => {
+  const entry = metadataEntryForDescription("folder", "初回メモ", [], null);
+  assert.equal(entry.bookmarkId, "folder");
+  assert.equal(entry.description, "初回メモ");
+  assert.equal(entry.revision, 1);
+  assert.deepEqual(entry.linkReferences, []);
+});
+
 test("説明文の行頭空白を箇条書き階層として解析する", () => {
   assert.deepEqual(parseDescriptionLines("日本語入力\n [Mozc]\n\t[Google日本語入力]\n　　変換エンジン"), [
     { depth: 0, prefix: "", text: "日本語入力" },

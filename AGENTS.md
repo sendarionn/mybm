@@ -17,3 +17,12 @@
 - ドキュメント変更では自動保存とLinksの更新だけを行う
 - Enterで不要なインデントを自動挿入しない
 - Tabはインデントとして1文字だけ挿入する
+
+## Chrome実機検証
+
+- Chrome拡張機能の変更後は `npm run build` と `npm test` を実行する
+- Chrome DevTools MCPを利用できる環境では `npm run test:chrome` も実行する
+- 実機テストは専用プロファイルとテストデータを使用する
+- 既存プロファイルのブックマークと `chrome.storage.local` を変更しない
+- 保存不具合ではService Workerの応答、ストレージ内容、ポップアップのConsoleを確認する
+- 実機確認できない項目は完了扱いにせず未確認事項として報告する

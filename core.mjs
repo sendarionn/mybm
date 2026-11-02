@@ -87,12 +87,13 @@ export function resolveLinkedLabel(label, entry, nodes) {
 }
 
 export function metadataEntryForDescription(nodeId, description, nodes, previousEntry = {}) {
+  const previous = previousEntry || {};
   return {
     bookmarkId: nodeId,
     description,
     updatedAt: Date.now(),
-    revision: (previousEntry.revision || 0) + 1,
-    linkReferences: resolveLinkReferences(description, nodes, previousEntry.linkReferences || [])
+    revision: (previous.revision || 0) + 1,
+    linkReferences: resolveLinkReferences(description, nodes, previous.linkReferences || [])
   };
 }
 

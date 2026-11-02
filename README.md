@@ -109,6 +109,36 @@ IME変換中の入力とEnterには独自処理を加えず、CodeMirrorの入�
 ```sh
 npm run build
 npm test
+npm run test:chrome
 ```
+
+`npm run test:chrome` はChrome DevTools MCPの一時プロファイルへmybmを読み込み、テスト専用のブックマークとフォルダで次を確認する
+
+- 拡張機能とService Workerの読み込み
+- フォルダ表示とフォルダ内検索へのフォーカス
+- 子フォルダと所属ブックマークの表示
+- ブックマークとフォルダのメモ保存、バックアップ、再読み込み後の保持
+- ポップアップのスクリーンショット取得
+- ポップアップのConsoleエラー
+
+既存のChromeプロファイル、ブックマーク、mybmメモは使用しない
+
+Codexから既存Chromeへ接続する場合は、先に次を実行する
+
+```sh
+codex mcp add chrome-devtools -- npx -y chrome-devtools-mcp@latest --categoryExtensions --autoConnect
+```
+
+Chrome 144以降で `chrome://inspect/#remote-debugging` を開き、リモートデバッグを有効にする
+
+MCP追加後にツールが表示されない場合はCodexを再起動する
+
+Modern Web Guidanceは次のコマンドでCodex向けに導入する
+
+```sh
+npx modern-web-guidance@latest install --choose
+```
+
+`chrome-extensions` と `modern-web-guidance` を選択する
 
 Chromeブックマークとフォルダ本体は変更せず、説明文だけを拡張機能のローカルストレージで管理する
