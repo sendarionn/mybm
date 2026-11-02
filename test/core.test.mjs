@@ -9,6 +9,7 @@ import {
   childNodes,
   descendantNodes,
   buildLinkGraph,
+  buildInitialNodeList,
   buildLinksForTarget,
   hasMetadataSaveConflict,
   metadataEntryForDescription,
@@ -115,6 +116,26 @@ test("Omniboxの一時フォルダ指定をウィンドウ別かつ期限付き�
 
 test("未検索時は追加日時の新しい順になる", () => {
   assert.deepEqual(searchBookmarks(bookmarks, {}, "").map(({ id }) => id), ["2", "3", "1"]);
+});
+
+test("初期一覧は内部ルートを除くフォルダを階層順に並べてから最近のブックマークを表示する", () => {
+  const nodes = flattenNodes([{ id: "0", title: "", children: [{
+    id: "1",
+    title: "ブックマーク バー",
+    children: [
+      { id: "folder-a", title: "開発", children: [
+        { id: "folder-b", title: "エディタ", children: [] },
+        { id: "old", title: "古い", url: "https://old.example", dateAdded: 1 }
+      ] },
+      { id: "new", title: "新しい", url: "https://new.example", dateAdded: 2 }
+    ]
+  }] }]);
+  assert.deepEqual(buildInitialNodeList(nodes).map(({ id }) => id), [
+    "folder-a",
+    "folder-b",
+    "new",
+    "old"
+  ]);
 });
 
 test("タイトルを大文字小文字を区別せず部分一致検索する", () => {

@@ -1,5 +1,6 @@
 import {
   flattenNodes,
+  buildInitialNodeList,
   buildLinksForTarget,
   buildLinkSuggestions,
   bookmarkletSource,
@@ -9,7 +10,6 @@ import {
   isPendingFolderTargetFresh,
   pendingFolderTargetKey,
   resolveLinkedLabel,
-  searchBookmarks,
   searchFolderNodes,
   searchNodes
 } from "./core.mjs";
@@ -43,7 +43,6 @@ const elements = {
   saveStatus: document.querySelector("#save-status")
 };
 
-let bookmarks = [];
 let nodes = [];
 let metadata = {};
 let selectedNode = null;
@@ -62,7 +61,6 @@ async function loadData() {
     readMetadata(chrome.storage.local)
   ]);
   nodes = flattenNodes(tree);
-  bookmarks = nodes.filter(({ type }) => type === "bookmark");
   metadata = storedMetadata;
 }
 
@@ -136,8 +134,8 @@ function renderResults() {
   const query = elements.search.value;
   const matches = query.trim()
     ? searchNodes(nodes, metadata, query)
-    : searchBookmarks(bookmarks, metadata, query);
-  elements.heading.textContent = query.trim() ? "検索結果" : "最近追加したブックマーク";
+    : buildInitialNodeList(nodes);
+  elements.heading.textContent = query.trim() ? "検索結果" : "フォルダと最近追加したブックマーク";
   elements.results.replaceChildren();
   elements.status.textContent = matches.length ? "" : "該当する項目がありません";
   let offset = 0;
@@ -406,7 +404,6 @@ function openNode(node, edit = false) {
   elements.descriptionArea.hidden = false;
   elements.description.value = metadata[node.id]?.description || "";
   lastSubmittedDescriptions.set(node.id, elements.description.value);
-  elements.editorSurface.classList.toggle("folder-description", node.type === "folder");
   elements.folderContents.hidden = node.type !== "folder";
   elements.folderSearch.value = "";
   if (node.type === "folder") {
@@ -445,7 +442,6 @@ function openVirtual(target) {
   elements.titleEditor.hidden = true;
   elements.url.hidden = true;
   elements.descriptionArea.hidden = true;
-  elements.editorSurface.classList.remove("folder-description");
   elements.folderContents.hidden = true;
   elements.saveStatus.textContent = "";
   elements.listView.hidden = true;
@@ -691,7 +687,6 @@ async function flushSave() {
 async function refreshBookmarks() {
   const tree = await chrome.bookmarks.getTree();
   nodes = flattenNodes(tree);
-  bookmarks = nodes.filter(({ type }) => type === "bookmark");
   if (selectedNode) {
     const latest = nodes.find(({ id }) => id === selectedNode.id);
     if (latest) {

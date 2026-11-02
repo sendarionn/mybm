@@ -89,7 +89,24 @@ try {
   }));
 
   const snapshot = async () => textContent(await call("take_snapshot", { pageId: popupPageId }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
   let current = await snapshot();
+  assert.match(current, /mybm Chrome smoke/);
+  assert.match(current, /child folder/);
+  const globalSearchUid = uidFor(current, /searchbox "ブックマークを検索"/);
+  await call("fill", { pageId: popupPageId, uid: globalSearchUid, value: "no matching node" });
+  current = await snapshot();
+  await call("evaluate_script", {
+    pageId: popupPageId,
+    function: `() => {
+      const input = document.querySelector("#search");
+      input.value = "";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
+    }`
+  });
+  current = await snapshot();
+  assert.match(current, /mybm Chrome smoke/);
+  assert.match(current, /child folder/);
   await call("fill", {
     pageId: popupPageId,
     uid: uidFor(current, /searchbox "ブックマークを検索"/),
@@ -105,6 +122,11 @@ try {
   assert.match(current, /searchbox "フォルダ内を検索"[^\n]*focused/);
   assert.match(current, /child folder/);
   assert.match(current, /test bookmark/);
+  const folderPreviewHeight = returnedJson(await call("evaluate_script", {
+    pageId: popupPageId,
+    function: `() => ({ height: document.querySelector("#description-preview").getBoundingClientRect().height })`,
+    waitForStableDom: false
+  })).height;
   const screenshot = await call("take_screenshot", {
     pageId: popupPageId,
     format: "webp"
@@ -118,8 +140,41 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 100));
   current = await snapshot();
   const editorUid = uidFor(current, /textbox "説明"/);
+  const folderEditorHeight = returnedJson(await call("evaluate_script", {
+    pageId: popupPageId,
+    function: `() => ({ height: document.querySelector("#description-editor .cm-editor").getBoundingClientRect().height })`,
+    waitForStableDom: false
+  })).height;
+  const selectEditorContent = () => call("evaluate_script", {
+    pageId: popupPageId,
+    function: `() => {
+      const content = document.querySelector("#description-editor .cm-content");
+      content.focus();
+      const range = document.createRange();
+      range.selectNodeContents(content);
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }`
+  });
+  await call("fill", { pageId: popupPageId, uid: editorUid, value: "first line\nsecond line\nthird line" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const expandedFolderEditorHeight = returnedJson(await call("evaluate_script", {
+    pageId: popupPageId,
+    function: `() => ({ height: document.querySelector("#description-editor .cm-editor").getBoundingClientRect().height })`,
+    waitForStableDom: false
+  })).height;
+  assert.equal(expandedFolderEditorHeight > folderEditorHeight, true);
+  await selectEditorContent();
+  await call("press_key", { pageId: popupPageId, key: "Backspace" });
   await call("fill", { pageId: popupPageId, uid: editorUid, value: "Chrome smoke memo" });
   await new Promise((resolve) => setTimeout(resolve, 200));
+  const shrunkFolderEditorHeight = returnedJson(await call("evaluate_script", {
+    pageId: popupPageId,
+    function: `() => ({ height: document.querySelector("#description-editor .cm-editor").getBoundingClientRect().height })`,
+    waitForStableDom: false
+  })).height;
+  assert.equal(shrunkFolderEditorHeight < expandedFolderEditorHeight, true);
 
   const stored = returnedJson(await call("evaluate_script", {
     serviceWorkerId,
@@ -136,12 +191,56 @@ try {
     uid: uidFor(current, /button "test bookmarkの説明を編集"/)
   });
   await new Promise((resolve) => setTimeout(resolve, 100));
+  const bookmarkPreviewHeight = returnedJson(await call("evaluate_script", {
+    pageId: popupPageId,
+    function: `() => ({ height: document.querySelector("#description-preview").getBoundingClientRect().height })`,
+    waitForStableDom: false
+  })).height;
   await call("evaluate_script", {
     pageId: popupPageId,
     function: `() => document.querySelector("#description-preview").click()`
   });
   await new Promise((resolve) => setTimeout(resolve, 100));
   current = await snapshot();
+  const bookmarkEditorHeight = returnedJson(await call("evaluate_script", {
+    pageId: popupPageId,
+    function: `() => ({ height: document.querySelector("#description-editor .cm-editor").getBoundingClientRect().height })`,
+    waitForStableDom: false
+  })).height;
+  assert.equal(Math.abs(folderPreviewHeight - bookmarkPreviewHeight) < 1, true);
+  assert.equal(Math.abs(folderEditorHeight - bookmarkEditorHeight) < 1, true);
+  assert.equal(bookmarkPreviewHeight < 50, true);
+  const bookmarkEditorMetrics = () => call("evaluate_script", {
+    pageId: popupPageId,
+    function: `() => {
+      const scroller = document.querySelector("#description-editor .cm-scroller");
+      return {
+        height: document.querySelector("#description-editor .cm-editor").getBoundingClientRect().height,
+        scrollable: scroller.scrollHeight > scroller.clientHeight
+      };
+    }`,
+    waitForStableDom: false
+  }).then(returnedJson);
+  await call("fill", {
+    pageId: popupPageId,
+    uid: uidFor(current, /textbox "説明"/),
+    value: "折り返し確認".repeat(30)
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal((await bookmarkEditorMetrics()).height > bookmarkEditorHeight, true);
+  await selectEditorContent();
+  await call("press_key", { pageId: popupPageId, key: "Backspace" });
+  await call("fill", {
+    pageId: popupPageId,
+    uid: uidFor(current, /textbox "説明"/),
+    value: Array.from({ length: 30 }, (_, index) => `line ${index}`).join("\n")
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const cappedMetrics = await bookmarkEditorMetrics();
+  assert.equal(cappedMetrics.height <= 220.5, true);
+  assert.equal(cappedMetrics.scrollable, true);
+  await selectEditorContent();
+  await call("press_key", { pageId: popupPageId, key: "Backspace" });
   await call("fill", {
     pageId: popupPageId,
     uid: uidFor(current, /textbox "説明"/),
@@ -156,6 +255,14 @@ try {
   }));
   assert.equal(bothStored.metadata[fixtures.folder.id].description, "Chrome smoke memo");
   assert.equal(bothStored.metadata[fixtures.bookmark.id].description, "Bookmark smoke memo");
+
+  await call("click", { pageId: popupPageId, uid: uidFor(await snapshot(), /button "一覧へ戻る"/) });
+  current = await snapshot();
+  assert.match(current, /searchbox "フォルダ内を検索"/);
+  await call("click", { pageId: popupPageId, uid: uidFor(current, /button "一覧へ戻る"/) });
+  current = await snapshot();
+  assert.match(current, /searchbox "ブックマークを検索"[^\n]*value="mybm Chrome smoke"/);
+  assert.match(current, /button "mybm Chrome smoke フォルダ/);
 
   const consoleMessages = textContent(await call("list_console_messages", {
     pageId: popupPageId,

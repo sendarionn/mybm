@@ -235,16 +235,20 @@ textarea:focus {
 
 .editor-surface {
   position: relative;
-  min-height: 210px;
+  min-height: 0;
 }
 
 textarea {
   position: relative;
   z-index: 1;
   width: 100%;
-  min-height: 210px;
+  height: auto;
+  min-height: calc(1.55em + 24px);
+  max-height: 220px;
   padding: 11px;
-  resize: vertical;
+  field-sizing: content;
+  resize: none;
+  overflow-y: auto;
   border: 1px solid #dadce0;
   border-radius: 8px;
   outline: none;
@@ -257,7 +261,8 @@ textarea {
 }
 
 .description-editor {
-  min-height: 210px;
+  min-height: 0;
+  max-height: 220px;
   border: 1px solid #dadce0;
   border-radius: 8px;
   overflow: hidden;
@@ -299,38 +304,26 @@ textarea {
 .cm-completionDetail { margin-left: 12px; color: #80868b; font-size: 11px; }
 
 .description-preview {
-  min-height: 210px;
+  min-height: calc(1.55em + 24px);
+  max-height: 220px;
   padding: 11px;
   border: 1px solid transparent;
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.55;
-  overflow: hidden;
+  overflow-y: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   tab-size: 1;
 }
 
 .description-preview:focus-visible { outline: 2px solid #1a73e8; }
 
-.editor-surface.folder-description { min-height: 0; }
-
-.folder-description .description-preview {
-  min-height: calc(1.55em + 24px);
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.folder-description .description-editor {
-  min-height: 0;
-  max-height: 220px;
-}
-
-.folder-description .description-editor .cm-editor {
+.description-editor .cm-editor {
   min-height: 0 !important;
   max-height: 220px;
 }
 
-.folder-description .description-editor .cm-scroller {
+.description-editor .cm-scroller {
   max-height: 220px;
   overflow-y: auto;
 }

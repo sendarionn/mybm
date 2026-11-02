@@ -522,6 +522,15 @@ export function searchBookmarks(bookmarks, metadata, rawQuery) {
   return searchNodes(bookmarks, metadata, rawQuery);
 }
 
+export function buildInitialNodeList(nodes) {
+  const nodeIds = new Set(nodes.map(({ id }) => id));
+  const folders = nodes.filter(({ type, parentId }) => type === "folder" && nodeIds.has(parentId));
+  const bookmarks = nodes
+    .filter(({ type }) => type === "bookmark")
+    .sort((a, b) => b.dateAdded - a.dateAdded);
+  return [...folders, ...bookmarks];
+}
+
 const OMNIBOX_BOOKMARK_PREFIX = "mybm-bookmark:";
 const OMNIBOX_NODE_PREFIX = "mybm-node:";
 

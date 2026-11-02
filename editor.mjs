@@ -170,10 +170,10 @@ export function createDescriptionEditor(parent, { getLinkSuggestions, onChange, 
         }
       }),
       EditorView.theme({
-        "&": { minHeight: "210px", fontSize: "13px" },
+        "&": { minHeight: "0", maxHeight: "220px", fontSize: "13px" },
         ".cm-content": { padding: "11px", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" },
         ".cm-line": { lineHeight: "1.55" },
-        ".cm-scroller": { overflow: "auto" },
+        ".cm-scroller": { maxHeight: "220px", overflow: "auto" },
         "&.cm-focused": { outline: "none" }
       })
     ] })
