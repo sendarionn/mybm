@@ -2,6 +2,7 @@ import {
   bookmarkletSource,
   buildOmniboxSuggestions,
   flattenNodes,
+  hasMetadataSaveConflict,
   isBookmarkletUrl,
   metadataEntryForDescription,
   migrateMetadataLinkReferences,
@@ -129,15 +130,19 @@ chrome.runtime.onInstalled.addListener(async () => {
   await queueMetadataMutation(migrateMetadata);
 });
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type !== "saveMetadataEntry") return undefined;
-  return queueMetadataMutation(async () => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type !== "saveMetadataEntry") return false;
+  queueMetadataMutation(async () => {
     const nodes = await loadNodes();
     const stored = await readMetadata(chrome.storage.local);
     const migration = migrateMetadataLinkReferences(stored, nodes);
     const metadata = migration.metadata;
     const currentEntry = metadata[message.nodeId] || null;
-    if ((currentEntry?.revision || 0) !== (message.baseRevision || 0)) {
+    if (hasMetadataSaveConflict(
+      currentEntry,
+      message.baseRevision,
+      message.previousDescription
+    )) {
       return { ok: false, conflict: true, entry: currentEntry };
     }
     if (message.description) {
@@ -152,7 +157,13 @@ chrome.runtime.onMessage.addListener((message) => {
     }
     await writeMetadata(chrome.storage.local, metadata);
     return { ok: true, entry: metadata[message.nodeId] || null };
-  });
+  })
+    .then(sendResponse)
+    .catch((error) => {
+      console.error("mybm save failed", error);
+      sendResponse({ ok: false, error: String(error) });
+    });
+  return true;
 });
 
 chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {

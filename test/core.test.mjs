@@ -10,6 +10,7 @@ import {
   descendantNodes,
   buildLinkGraph,
   buildLinksForTarget,
+  hasMetadataSaveConflict,
   metadataEntryForDescription,
   mergeRenamedLinksIntoEditedDescription,
   migrateMetadataLinkReferences,
@@ -464,6 +465,13 @@ test("URLだけの変更ではリンク参照を変更しない", () => {
     { id: "target", type: "bookmark", title: "対象", url: "https://old.example" }
   ]);
   assert.deepEqual(references, [{ label: "対象", occurrence: 0, targetId: "target" }]);
+});
+
+test("連続入力は直前の送信内容が保存済みならrevision差を許可する", () => {
+  const current = { description: "入力A", revision: 2 };
+  assert.equal(hasMetadataSaveConflict(current, 1, "入力A"), false);
+  assert.equal(hasMetadataSaveConflict(current, 1, "別の内容"), true);
+  assert.equal(hasMetadataSaveConflict(current, 2, "別の内容"), false);
 });
 
 test("説明文の行頭空白を箇条書き階層として解析する", () => {

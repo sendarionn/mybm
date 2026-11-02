@@ -49,9 +49,10 @@ let metadata = {};
 let selectedNode = null;
 let selectedTarget = null;
 let navigationStack = [];
-let saveTimer = null;
-let saving = false;
-let saveAgain = false;
+let saveSequence = 0;
+const pendingSaveRequests = new Set();
+const lastSubmittedDescriptions = new Map();
+const conflictedNodeIds = new Set();
 let descriptionEditor = null;
 let resultRenderGeneration = 0;
 
@@ -404,6 +405,7 @@ function openNode(node, edit = false) {
   elements.url.hidden = node.type !== "bookmark";
   elements.descriptionArea.hidden = false;
   elements.description.value = metadata[node.id]?.description || "";
+  lastSubmittedDescriptions.set(node.id, elements.description.value);
   elements.folderContents.hidden = node.type !== "folder";
   elements.folderSearch.value = "";
   if (node.type === "folder") {
@@ -570,43 +572,53 @@ async function finishUrlEditing() {
   }
 }
 
-async function saveDescription() {
-  if (!selectedNode) return;
-  if (saving) {
-    saveAgain = true;
-    return;
+function saveDescription(description = elements.description.value) {
+  if (!selectedNode) return Promise.resolve();
+  const nodeId = selectedNode.id;
+  if (conflictedNodeIds.has(nodeId)) {
+    elements.saveStatus.textContent = "名称変更との競合を確認してください";
+    return Promise.resolve();
   }
+  const sequence = ++saveSequence;
+  const previousDescription = lastSubmittedDescriptions.has(nodeId)
+    ? lastSubmittedDescriptions.get(nodeId)
+    : metadata[nodeId]?.description || "";
+  lastSubmittedDescriptions.set(nodeId, description);
+  elements.saveStatus.textContent = "未保存";
 
-  saving = true;
-  const bookmarkId = selectedNode.id;
-  const description = elements.description.value;
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: "saveMetadataEntry",
-      nodeId: bookmarkId,
-      description,
-      baseRevision: metadata[bookmarkId]?.revision || 0
-    });
-    if (response?.conflict) {
-      if (response.entry) metadata[bookmarkId] = response.entry;
-      if (selectedNode?.id === bookmarkId) {
-        elements.saveStatus.textContent = "名称変更との競合を確認してください";
+  const request = chrome.runtime.sendMessage({
+    type: "saveMetadataEntry",
+    nodeId,
+    description,
+    previousDescription,
+    baseRevision: metadata[nodeId]?.revision || 0
+  })
+    .then((response) => {
+      if (response?.conflict) {
+        if (response.entry) metadata[nodeId] = response.entry;
+        if (selectedNode?.id === nodeId && sequence === saveSequence) {
+          conflictedNodeIds.add(nodeId);
+          elements.saveStatus.textContent = "名称変更との競合を確認してください";
+        }
+        return;
       }
-      return;
-    }
-    if (!response?.ok) throw new Error("save failed");
-    if (response.entry) metadata[bookmarkId] = response.entry;
-    else delete metadata[bookmarkId];
-    if (selectedNode?.id === bookmarkId) elements.saveStatus.textContent = "保存済み";
-  } catch {
-    if (selectedNode?.id === bookmarkId) elements.saveStatus.textContent = "未保存";
-  } finally {
-    saving = false;
-    if (saveAgain) {
-      saveAgain = false;
-      await saveDescription();
-    }
-  }
+      if (!response?.ok) throw new Error(response?.error || "save failed");
+      if (response.entry) metadata[nodeId] = response.entry;
+      else delete metadata[nodeId];
+      conflictedNodeIds.delete(nodeId);
+      if (selectedNode?.id === nodeId && sequence === saveSequence) {
+        elements.saveStatus.textContent = "保存済み";
+      }
+    })
+    .catch((error) => {
+      console.error("mybm save failed", error);
+      if (selectedNode?.id === nodeId && sequence === saveSequence) {
+        elements.saveStatus.textContent = "未保存";
+      }
+    })
+    .finally(() => pendingSaveRequests.delete(request));
+  pendingSaveRequests.add(request);
+  return request;
 }
 
 function applyLinkedNodeRename(message) {
@@ -628,6 +640,8 @@ function applyLinkedNodeRename(message) {
       message.title
     );
     if (merged.changed) {
+      conflictedNodeIds.delete(change.sourceId);
+      const hadUnsavedInput = current !== change.beforeDescription;
       elements.description.value = merged.description;
       metadata[change.sourceId] = {
         ...metadata[change.sourceId],
@@ -637,9 +651,15 @@ function applyLinkedNodeRename(message) {
       if (descriptionEditor) descriptionEditor.setValue(merged.description);
       renderDescription();
       renderLinks();
-      if (current !== change.beforeDescription) scheduleSave();
-      else elements.saveStatus.textContent = "リンク名を更新しました";
+      if (hadUnsavedInput) {
+        lastSubmittedDescriptions.set(change.sourceId, current);
+        scheduleSave();
+      } else {
+        lastSubmittedDescriptions.set(change.sourceId, merged.description);
+        elements.saveStatus.textContent = "リンク名を更新しました";
+      }
     } else if (merged.conflict) {
+      conflictedNodeIds.add(change.sourceId);
       elements.saveStatus.textContent = "名称変更との競合を確認してください";
     }
   }
@@ -650,19 +670,13 @@ function applyLinkedNodeRename(message) {
 
 function scheduleSave() {
   if (!selectedNode) return;
-  clearTimeout(saveTimer);
-  elements.saveStatus.textContent = "未保存";
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    saveDescription();
-  }, 500);
+  saveDescription(elements.description.value);
 }
 
 async function flushSave() {
-  if (!saveTimer) return;
-  clearTimeout(saveTimer);
-  saveTimer = null;
-  await saveDescription();
+  while (pendingSaveRequests.size) {
+    await Promise.allSettled([...pendingSaveRequests]);
+  }
 }
 
 async function refreshBookmarks() {

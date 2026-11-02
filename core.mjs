@@ -96,6 +96,11 @@ export function metadataEntryForDescription(nodeId, description, nodes, previous
   };
 }
 
+export function hasMetadataSaveConflict(currentEntry, baseRevision, previousDescription) {
+  if ((currentEntry?.revision || 0) === (baseRevision || 0)) return false;
+  return (currentEntry?.description || "") !== (previousDescription || "");
+}
+
 export function migrateMetadataLinkReferences(metadata, nodes) {
   let changed = false;
   const migrated = {};
