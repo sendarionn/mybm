@@ -1,6 +1,10 @@
 const LINK_PATTERN = /\[([^\[\]\n]+)\]/g;
 const BOOKMARKLET_PATTERN = /^\s*javascript:/i;
 
+function nodeType(node) {
+  return node.type || (node.url ? "bookmark" : "folder");
+}
+
 export function isBookmarkletUrl(url = "") {
   return BOOKMARKLET_PATTERN.test(url);
 }
@@ -30,7 +34,7 @@ export function extractLinks(description = "") {
   return links;
 }
 
-export function buildLinkSuggestions(bookmarks, metadata) {
+export function buildLinkSuggestions(nodes, metadata) {
   const suggestions = [];
   const seen = new Set();
   const add = (label, detail) => {
@@ -41,7 +45,7 @@ export function buildLinkSuggestions(bookmarks, metadata) {
     suggestions.push({ label: value, detail });
   };
 
-  for (const bookmark of bookmarks) add(bookmark.title, "ブックマーク");
+  for (const node of nodes) add(node.title, nodeType(node) === "folder" ? "フォルダ" : "ブックマーク");
   for (const value of Object.values(metadata)) {
     for (const link of extractLinks(value?.description || "")) add(link, "リンク");
   }
@@ -55,27 +59,65 @@ export function parseDescriptionLines(description = "") {
   });
 }
 
-export function flattenBookmarks(nodes, parentPath = []) {
+export function flattenNodes(nodes, parentPath = [], parentId = null) {
   const result = [];
 
   for (const node of nodes) {
-    if (node.url) {
+    const type = node.url ? "bookmark" : "folder";
+    const visible = type === "bookmark" || Boolean(node.title);
+    const currentPath = parentPath.join(" / ");
+    if (visible) {
       result.push({
         id: node.id,
+        parentId: node.parentId ?? parentId,
+        type,
         title: node.title || node.url,
-        url: node.url,
+        url: node.url || "",
         dateAdded: node.dateAdded || 0,
-        folder: parentPath.join(" / ")
+        folder: currentPath
       });
     }
 
     if (node.children) {
-      const nextPath = node.url || !node.title ? parentPath : [...parentPath, node.title];
-      result.push(...flattenBookmarks(node.children, nextPath));
+      const nextPath = type === "folder" && node.title ? [...parentPath, node.title] : parentPath;
+      result.push(...flattenNodes(node.children, nextPath, node.id));
     }
   }
 
   return result;
+}
+
+export function flattenBookmarks(nodes, parentPath = []) {
+  return flattenNodes(nodes, parentPath)
+    .filter(({ type }) => type === "bookmark")
+    .map(({ parentId: _parentId, type: _type, ...bookmark }) => bookmark);
+}
+
+export function childNodes(nodes, folderId) {
+  return nodes.filter(({ parentId }) => parentId === folderId);
+}
+
+/*
+ * Chromeのツリーを正本とし、mybmでは検索と表示に必要な平坦な参照だけを作る
+ */
+export function nodeById(nodes, id) {
+  return nodes.find((node) => node.id === id) || null;
+}
+
+export function removedNodeIds(id, node = {}) {
+  const ids = [id];
+  const collect = (children = []) => {
+    for (const child of children) {
+      ids.push(child.id);
+      collect(child.children);
+    }
+  };
+  collect(node.children);
+  return ids;
+}
+
+export function folderViewerPath(folderId) {
+  return `viewer.html?folderId=${encodeURIComponent(folderId)}`;
 }
 
 function normalize(value) {
@@ -120,12 +162,12 @@ export function findMatchingDescriptionLine(description, query) {
     .find((line) => findTextMatches(line, query).length) || "";
 }
 
-export function buildMatchContext(bookmark, metadataEntry, query, radius = 8, hideLinkSyntax = false) {
+export function buildMatchContext(node, metadataEntry, query, radius = 8, hideLinkSyntax = false) {
   if (!normalize(query)) return { text: "", matches: [] };
   const descriptionLine = findMatchingDescriptionLine(metadataEntry?.description || "", query);
   const source = [
-    { text: bookmark.title, description: false },
-    { text: bookmark.url, description: false },
+    { text: node.title, description: false },
+    { text: node.url || "", description: false },
     { text: descriptionLine, description: true }
   ].find(({ text }) => text && findTextMatches(text, query).length);
   if (!source) return { text: "", matches: [] };
@@ -154,59 +196,59 @@ export function buildMatchContext(bookmark, metadataEntry, query, radius = 8, hi
   };
 }
 
-export function resolveLinkTarget(title, bookmarks) {
+export function resolveLinkTarget(title, nodes) {
   const normalizedTitle = normalize(title);
-  const matches = bookmarks.filter((bookmark) => normalize(bookmark.title) === normalizedTitle);
-  if (matches.length === 1) return { type: "bookmark", bookmark: matches[0] };
+  const matches = nodes.filter((node) => normalize(node.title) === normalizedTitle);
+  if (matches.length === 1) return { type: nodeType(matches[0]), node: matches[0] };
   return { type: "virtual", title: title.trim(), matches };
 }
 
 export function targetKey(target) {
-  return target.type === "bookmark"
-    ? `bookmark:${target.bookmark.id}`
-    : `virtual:${normalize(target.title)}`;
+  return target.type === "virtual"
+    ? `virtual:${normalize(target.title)}`
+    : `node:${target.node.id}`;
 }
 
-export function buildLinkGraph(bookmarks, metadata) {
+export function buildLinkGraph(nodes, metadata) {
   const relations = new Map();
   const add = (key, label) => {
     if (!relations.has(key)) relations.set(key, new Set());
     relations.get(key).add(label);
   };
 
-  for (const bookmark of bookmarks) {
-    const sourceKey = `bookmark:${bookmark.id}`;
-    for (const label of extractLinks(metadata[bookmark.id]?.description || "")) {
-      const target = resolveLinkTarget(label, bookmarks);
+  for (const node of nodes) {
+    const sourceKey = `node:${node.id}`;
+    for (const label of extractLinks(metadata[node.id]?.description || "")) {
+      const target = resolveLinkTarget(label, nodes);
       const destinationKey = targetKey(target);
       add(sourceKey, label);
-      add(destinationKey, bookmark.title);
+      add(destinationKey, node.title);
     }
   }
 
   return new Map([...relations].map(([key, labels]) => [key, [...labels]]));
 }
 
-export function buildLinksForTarget(bookmarks, metadata, target) {
+export function buildLinksForTarget(nodes, metadata, target) {
   const selectedKey = targetKey(target);
   const links = new Set();
-  const bookmarksByTitle = new Map();
-  for (const bookmark of bookmarks) {
-    const key = normalize(bookmark.title);
-    const matches = bookmarksByTitle.get(key) || [];
-    matches.push(bookmark);
-    bookmarksByTitle.set(key, matches);
+  const nodesByTitle = new Map();
+  for (const node of nodes) {
+    const key = normalize(node.title);
+    const matches = nodesByTitle.get(key) || [];
+    matches.push(node);
+    nodesByTitle.set(key, matches);
   }
 
-  for (const bookmark of bookmarks) {
-    const sourceKey = `bookmark:${bookmark.id}`;
-    for (const label of extractLinks(metadata[bookmark.id]?.description || "")) {
-      const matches = bookmarksByTitle.get(normalize(label)) || [];
+  for (const node of nodes) {
+    const sourceKey = `node:${node.id}`;
+    for (const label of extractLinks(metadata[node.id]?.description || "")) {
+      const matches = nodesByTitle.get(normalize(label)) || [];
       const destinationKey = matches.length === 1
-        ? `bookmark:${matches[0].id}`
+        ? `node:${matches[0].id}`
         : `virtual:${normalize(label)}`;
       if (sourceKey === selectedKey) links.add(label);
-      if (destinationKey === selectedKey) links.add(bookmark.title);
+      if (destinationKey === selectedKey) links.add(node.title);
     }
   }
   return [...links];
@@ -223,30 +265,35 @@ function fieldScore(value, query, base) {
   return /[^\p{L}\p{N}]/u.test(previous) ? base + 20 : base + 30;
 }
 
-export function searchBookmarks(bookmarks, metadata, rawQuery) {
+export function searchNodes(nodes, metadata, rawQuery) {
   const query = normalize(rawQuery);
   if (!query) {
-    return [...bookmarks].sort((a, b) => b.dateAdded - a.dateAdded);
+    return [...nodes].sort((a, b) => b.dateAdded - a.dateAdded);
   }
 
-  return bookmarks
-    .map((bookmark) => {
-      const description = metadata[bookmark.id]?.description || "";
+  return nodes
+    .map((node) => {
+      const description = metadata[node.id]?.description || "";
       const scores = [
-        fieldScore(bookmark.title, query, 0),
-        fieldScore(bookmark.url, query, 40),
+        fieldScore(node.title, query, 0),
+        fieldScore(node.url || "", query, 40),
         fieldScore(description, query, 70),
         ...extractLinks(description).map((link) => fieldScore(link, query, 60))
       ].filter((score) => score !== null);
 
-      return scores.length ? { bookmark, score: Math.min(...scores) } : null;
+      return scores.length ? { node, score: Math.min(...scores) } : null;
     })
     .filter(Boolean)
-    .sort((a, b) => a.score - b.score || b.bookmark.dateAdded - a.bookmark.dateAdded)
-    .map(({ bookmark }) => bookmark);
+    .sort((a, b) => a.score - b.score || b.node.dateAdded - a.node.dateAdded)
+    .map(({ node }) => node);
+}
+
+export function searchBookmarks(bookmarks, metadata, rawQuery) {
+  return searchNodes(bookmarks, metadata, rawQuery);
 }
 
 const OMNIBOX_BOOKMARK_PREFIX = "mybm-bookmark:";
+const OMNIBOX_NODE_PREFIX = "mybm-node:";
 
 export function omniboxBookmarkContent(bookmarkId) {
   return `${OMNIBOX_BOOKMARK_PREFIX}${encodeURIComponent(bookmarkId)}`;
@@ -256,6 +303,28 @@ export function parseOmniboxBookmarkContent(content = "") {
   if (!content.startsWith(OMNIBOX_BOOKMARK_PREFIX)) return null;
   try {
     return decodeURIComponent(content.slice(OMNIBOX_BOOKMARK_PREFIX.length));
+  } catch {
+    return null;
+  }
+}
+
+export function omniboxNodeContent(node) {
+  return `${OMNIBOX_NODE_PREFIX}${encodeURIComponent(nodeType(node))}:${encodeURIComponent(node.id)}`;
+}
+
+export function parseOmniboxNodeContent(content = "") {
+  if (content.startsWith(OMNIBOX_BOOKMARK_PREFIX)) {
+    const id = parseOmniboxBookmarkContent(content);
+    return id === null ? null : { type: "bookmark", id };
+  }
+  if (!content.startsWith(OMNIBOX_NODE_PREFIX)) return null;
+  const separator = content.indexOf(":", OMNIBOX_NODE_PREFIX.length);
+  if (separator < 0) return null;
+  try {
+    return {
+      type: decodeURIComponent(content.slice(OMNIBOX_NODE_PREFIX.length, separator)),
+      id: decodeURIComponent(content.slice(separator + 1))
+    };
   } catch {
     return null;
   }
@@ -281,27 +350,32 @@ function formatOmniboxMatchContext(context) {
   ].join("");
 }
 
-export function buildOmniboxSuggestions(bookmarks, metadata, query, limit = 6) {
-  return searchBookmarks(bookmarks, metadata, query).slice(0, limit).map((bookmark) => {
-    const context = buildMatchContext(bookmark, metadata[bookmark.id], query, 8, true);
+export function buildOmniboxSuggestions(nodes, metadata, query, limit = 6) {
+  return searchNodes(nodes, metadata, query).slice(0, limit).map((node) => {
+    const context = buildMatchContext(node, metadata[node.id], query, 8, true);
+    const suffix = nodeType(node) === "folder" ? "フォルダ" : node.url;
     return {
-      content: omniboxBookmarkContent(bookmark.id),
+      content: omniboxNodeContent(node),
       description: [
-        escapeOmniboxDescription(bookmark.title),
+        escapeOmniboxDescription(node.title),
         "<dim>｜</dim>",
         formatOmniboxMatchContext(context),
         "<dim>｜</dim>",
-        `<dim>${escapeOmniboxDescription(bookmark.url)}</dim>`
+        `<dim>${escapeOmniboxDescription(suffix)}</dim>`
       ].join("")
     };
   });
 }
 
+export function resolveOmniboxNode(nodes, metadata, input) {
+  const parsed = parseOmniboxNodeContent(input);
+  return parsed
+    ? nodes.find((node) => node.id === parsed.id && nodeType(node) === parsed.type) || null
+    : searchNodes(nodes, metadata, input)[0] || null;
+}
+
 export function resolveOmniboxBookmark(bookmarks, metadata, input) {
-  const bookmarkId = parseOmniboxBookmarkContent(input);
-  return bookmarkId
-    ? bookmarks.find(({ id }) => id === bookmarkId) || null
-    : searchBookmarks(bookmarks, metadata, input)[0] || null;
+  return resolveOmniboxNode(bookmarks, metadata, input);
 }
 
 export function isImeKeyEvent(event) {

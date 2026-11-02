@@ -46,3 +46,14 @@ export async function preserveMetadataForUpdate(storageArea) {
   await writeMetadata(storageArea, metadata);
   return metadata;
 }
+
+export function removeMetadataEntries(metadata, ids) {
+  let changed = false;
+  for (const id of ids) {
+    if (metadata[id]) {
+      delete metadata[id];
+      changed = true;
+    }
+  }
+  return changed;
+}

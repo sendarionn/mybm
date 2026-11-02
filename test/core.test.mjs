@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import {
   extractLinks,
   flattenBookmarks,
+  flattenNodes,
+  folderViewerPath,
+  childNodes,
   buildLinkGraph,
   buildLinksForTarget,
   isImeKeyEvent,
@@ -14,11 +17,16 @@ import {
   findTextMatches,
   buildOmniboxSuggestions,
   omniboxBookmarkContent,
+  omniboxNodeContent,
   parseOmniboxBookmarkContent,
+  parseOmniboxNodeContent,
   parseDescriptionLines,
+  removedNodeIds,
   resolveLinkTarget,
   resolveOmniboxBookmark,
+  resolveOmniboxNode,
   searchBookmarks,
+  searchNodes,
   shouldInsertIndent
 } from "../core.mjs";
 import {
@@ -41,6 +49,39 @@ test("Cosense形式のリンクを重複なく抽出する", () => {
 test("フォルダ階層からブックマークだけを取り出す", () => {
   const tree = [{ id: "0", title: "", children: [{ id: "f", title: "仕事", children: [bookmarks[0]] }] }];
   assert.deepEqual(flattenBookmarks(tree), [{ ...bookmarks[0], folder: "仕事" }]);
+});
+
+test("Chromeフォルダを親子関係を保った共通ノードへ変換する", () => {
+  const tree = [{ id: "0", title: "", children: [{
+    id: "f",
+    title: "仕事",
+    children: [{ ...bookmarks[0], parentId: "f" }]
+  }] }];
+  const nodes = flattenNodes(tree);
+  assert.deepEqual(nodes.map(({ id, type, parentId }) => ({ id, type, parentId })), [
+    { id: "f", type: "folder", parentId: "0" },
+    { id: "1", type: "bookmark", parentId: "f" }
+  ]);
+  assert.deepEqual(childNodes(nodes, "f").map(({ id }) => id), ["1"]);
+});
+
+test("フォルダの移動と名称変更後も同じIDでメタデータを参照する", () => {
+  const before = flattenNodes([{ id: "0", title: "", children: [{ id: "f", title: "旧名" }] }]);
+  const after = flattenNodes([{ id: "0", title: "", children: [{ id: "p", title: "親", children: [{ id: "f", title: "新名" }] }] }]);
+  const metadata = { f: { description: "維持される説明" } };
+  assert.equal(metadata[before.find(({ id }) => id === "f").id].description, "維持される説明");
+  assert.equal(metadata[after.find(({ id }) => id === "f").id].description, "維持される説明");
+});
+
+test("削除フォルダと配下ノードのIDを再帰的に収集する", () => {
+  assert.deepEqual(removedNodeIds("f", {
+    id: "f",
+    children: [{ id: "c", children: [{ id: "b" }] }]
+  }), ["f", "c", "b"]);
+});
+
+test("フォルダIDをビューワーURLへ安全に埋め込む", () => {
+  assert.equal(folderViewerPath("id / 日本語"), "viewer.html?folderId=id%20%2F%20%E6%97%A5%E6%9C%AC%E8%AA%9E");
 });
 
 test("未検索時は追加日時の新しい順になる", () => {
@@ -115,6 +156,11 @@ test("リンク入力候補をブックマーク名と既存リンクから生�
   ]);
 });
 
+test("リンク入力候補にフォルダを含める", () => {
+  const nodes = [...bookmarks, { id: "f", type: "folder", title: "開発ツール", url: "" }];
+  assert.equal(buildLinkSuggestions(nodes, {})[3].detail, "フォルダ");
+});
+
 test("完全一致と前方一致を部分一致より優先する", () => {
   const candidates = [
     { id: "a", title: "About GPT tools", url: "https://a.example", dateAdded: 3 },
@@ -127,8 +173,18 @@ test("完全一致と前方一致を部分一致より優先する", () => {
 test("オムニバー候補でも既存の検索順位と説明文検索を使う", () => {
   const metadata = { "1": { description: "[生成AI]" } };
   assert.deepEqual(buildOmniboxSuggestions(bookmarks, metadata, "生成AI", 6), [{
-    content: "mybm-bookmark:1",
+    content: "mybm-node:bookmark:1",
     description: "ChatGPT<dim>｜</dim><match>生成AI</match><dim>｜</dim><dim>https://chatgpt.com/</dim>"
+  }]);
+});
+
+test("フォルダ名とフォルダ説明文をOmnibox候補へ表示する", () => {
+  const folders = [{ id: "f / 1", type: "folder", title: "開発ツール", url: "", dateAdded: 400 }];
+  const metadata = { "f / 1": { description: "[ブラウザ開発]関連" } };
+  assert.deepEqual(searchNodes(folders, metadata, "ブラウザ開発").map(({ id }) => id), ["f / 1"]);
+  assert.deepEqual(buildOmniboxSuggestions(folders, metadata, "開発ツール"), [{
+    content: "mybm-node:folder:f%20%2F%201",
+    description: "開発ツール<dim>｜</dim><match>開発ツール</match><dim>｜</dim><dim>フォルダ</dim>"
   }]);
 });
 
@@ -139,11 +195,24 @@ test("オムニバー候補のIDを安全に往復する", () => {
   assert.equal(parseOmniboxBookmarkContent("mybm-bookmark:%E0%A4%A"), null);
 });
 
+test("Omniboxノードの種別とIDを安全に往復する", () => {
+  const content = omniboxNodeContent({ type: "folder", id: "id / 日本語" });
+  assert.deepEqual(parseOmniboxNodeContent(content), { type: "folder", id: "id / 日本語" });
+  assert.deepEqual(parseOmniboxNodeContent("mybm-bookmark:1"), { type: "bookmark", id: "1" });
+  assert.equal(parseOmniboxNodeContent("mybm-node:folder"), null);
+});
+
 test("オムニバーの候補選択と検索語確定をブックマークへ解決する", () => {
   const metadata = { "1": { description: "[生成AI]" } };
   assert.equal(resolveOmniboxBookmark(bookmarks, metadata, "mybm-bookmark:2")?.id, "2");
   assert.equal(resolveOmniboxBookmark(bookmarks, metadata, "生成AI")?.id, "1");
   assert.equal(resolveOmniboxBookmark(bookmarks, metadata, "存在しない"), null);
+});
+
+test("Omniboxで確定したフォルダをIDから解決する", () => {
+  const nodes = [...bookmarks, { id: "f", type: "folder", title: "開発ツール", url: "", dateAdded: 1 }];
+  assert.equal(resolveOmniboxNode(nodes, {}, "mybm-node:folder:f")?.id, "f");
+  assert.equal(resolveOmniboxNode(nodes, {}, "開発ツール")?.type, "folder");
 });
 
 test("オムニバー候補の表示文字列をエスケープする", () => {
@@ -177,8 +246,8 @@ test("順リンクと逆リンクを区別せずLinksへまとめる", () => {
   };
   const graph = buildLinkGraph(linkedBookmarks, linkedMetadata);
 
-  assert.deepEqual(graph.get("bookmark:a"), ["B", "仮想", "C"]);
-  assert.deepEqual(graph.get("bookmark:b"), ["A"]);
+  assert.deepEqual(graph.get("node:a"), ["B", "仮想", "C"]);
+  assert.deepEqual(graph.get("node:b"), ["A"]);
   assert.deepEqual(graph.get("virtual:仮想"), ["A"]);
 });
 
@@ -192,22 +261,41 @@ test("対象ノードのLinksだけを全体グラフと同じ結果で生成す
     a: { description: "[B]\n[仮想]" },
     c: { description: "[A]" }
   };
-  const target = { type: "bookmark", bookmark: linkedBookmarks[0] };
+  const target = { type: "bookmark", node: linkedBookmarks[0] };
 
   assert.deepEqual(
     buildLinksForTarget(linkedBookmarks, linkedMetadata, target),
-    buildLinkGraph(linkedBookmarks, linkedMetadata).get("bookmark:a")
+    buildLinkGraph(linkedBookmarks, linkedMetadata).get("node:a")
   );
 });
 
 test("リンク名から一意なブックマークと仮想ノードを解決する", () => {
-  assert.deepEqual(resolveLinkTarget("ChatGPT", bookmarks), { type: "bookmark", bookmark: bookmarks[0] });
+  assert.deepEqual(resolveLinkTarget("ChatGPT", bookmarks), { type: "bookmark", node: bookmarks[0] });
   assert.deepEqual(resolveLinkTarget("生成AI", bookmarks), { type: "virtual", title: "生成AI", matches: [] });
 
   const duplicate = [...bookmarks, { ...bookmarks[0], id: "4" }];
   const ambiguous = resolveLinkTarget("chatgpt", duplicate);
   assert.equal(ambiguous.type, "virtual");
   assert.deepEqual(ambiguous.matches.map(({ id }) => id), ["1", "4"]);
+});
+
+test("フォルダをリンク先に解決し、同名ノードは自動確定しない", () => {
+  const folder = { id: "f", type: "folder", title: "開発", url: "" };
+  assert.deepEqual(resolveLinkTarget("開発", [folder]), { type: "folder", node: folder });
+  const ambiguous = resolveLinkTarget("開発", [folder, { ...bookmarks[0], title: "開発" }]);
+  assert.equal(ambiguous.type, "virtual");
+  assert.deepEqual(ambiguous.matches.map(({ id }) => id), ["f", "1"]);
+});
+
+test("フォルダへの順リンクと被リンクを生成する", () => {
+  const folder = { id: "f", type: "folder", title: "開発", url: "" };
+  const nodes = [folder, { ...bookmarks[0], type: "bookmark" }];
+  const metadata = {
+    f: { description: "[ChatGPT]" },
+    "1": { description: "[開発]" }
+  };
+  assert.deepEqual(buildLinksForTarget(nodes, metadata, { type: "folder", node: folder }), ["ChatGPT"]);
+  assert.deepEqual(buildLinkGraph(nodes, metadata).get("node:f"), ["ChatGPT"]);
 });
 
 test("説明文の行頭空白を箇条書き階層として解析する", () => {

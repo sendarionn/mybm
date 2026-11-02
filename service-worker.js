@@ -1,13 +1,16 @@
 import {
   bookmarkletSource,
   buildOmniboxSuggestions,
-  flattenBookmarks,
+  folderViewerPath,
+  flattenNodes,
   isBookmarkletUrl,
-  resolveOmniboxBookmark
+  removedNodeIds,
+  resolveOmniboxNode
 } from "./core.mjs";
 import {
   preserveMetadataForUpdate,
   readMetadata,
+  removeMetadataEntries,
   writeMetadata
 } from "./storage.mjs";
 
@@ -19,7 +22,7 @@ async function loadBookmarksAndMetadata() {
     readMetadata(chrome.storage.local)
   ]);
   return {
-    bookmarks: flattenBookmarks(tree),
+    nodes: flattenNodes(tree),
     metadata
   };
 }
@@ -55,17 +58,29 @@ async function openBookmark(bookmark, disposition) {
   });
 }
 
+async function openFolder(folder, disposition) {
+  const url = chrome.runtime.getURL(folderViewerPath(folder.id));
+  if (disposition === "currentTab") {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      await chrome.tabs.update(tab.id, { url });
+      return;
+    }
+  }
+  await chrome.tabs.create({ url, active: disposition !== "newBackgroundTab" });
+}
+
 chrome.omnibox.setDefaultSuggestion({ description: "mybmでブックマークを検索" });
 
 chrome.omnibox.onInputChanged.addListener((text, suggest) => {
   const request = ++omniboxRequest;
   loadBookmarksAndMetadata()
-    .then(({ bookmarks, metadata }) => {
+    .then(({ nodes, metadata }) => {
       if (request !== omniboxRequest) return;
-      const suggestions = buildOmniboxSuggestions(bookmarks, metadata, text);
+      const suggestions = buildOmniboxSuggestions(nodes, metadata, text);
       const first = suggestions[0];
       chrome.omnibox.setDefaultSuggestion({
-        description: first?.description || "一致するブックマークなし"
+        description: first?.description || "一致するノードなし"
       });
       suggest(suggestions);
     })
@@ -74,9 +89,10 @@ chrome.omnibox.onInputChanged.addListener((text, suggest) => {
 
 chrome.omnibox.onInputEntered.addListener((text, disposition) => {
   loadBookmarksAndMetadata()
-    .then(({ bookmarks, metadata }) => {
-      const bookmark = resolveOmniboxBookmark(bookmarks, metadata, text);
-      if (bookmark) return openBookmark(bookmark, disposition);
+    .then(({ nodes, metadata }) => {
+      const node = resolveOmniboxNode(nodes, metadata, text);
+      if (node?.type === "folder") return openFolder(node, disposition);
+      if (node) return openBookmark(node, disposition);
       return undefined;
     })
     .catch((error) => console.error("mybm omnibox open failed", error));
@@ -89,22 +105,6 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
   const metadata = await readMetadata(chrome.storage.local);
-  const removedIds = [id];
-
-  function collectIds(nodes = []) {
-    for (const node of nodes) {
-      removedIds.push(node.id);
-      collectIds(node.children);
-    }
-  }
-
-  if (removeInfo.node?.children) collectIds(removeInfo.node.children);
-  let changed = false;
-  for (const removedId of removedIds) {
-    if (metadata[removedId]) {
-      delete metadata[removedId];
-      changed = true;
-    }
-  }
+  const changed = removeMetadataEntries(metadata, removedNodeIds(id, removeInfo.node));
   if (changed) await writeMetadata(chrome.storage.local, metadata);
 });

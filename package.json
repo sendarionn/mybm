@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild popup.js --bundle --format=esm --minify-whitespace --outfile=dist/popup.js",
+    "build": "esbuild popup.js viewer.js --bundle --format=esm --minify-whitespace --outdir=dist",
     "test": "node --test"
   },
   "devDependencies": {

@@ -1,13 +1,14 @@
 import {
-  extractLinks,
-  flattenBookmarks,
+  flattenNodes,
+  folderViewerPath,
   buildLinksForTarget,
   buildLinkSuggestions,
   bookmarkletSource,
   isBookmarkletUrl,
   parseDescriptionLines,
   resolveLinkTarget,
-  searchBookmarks
+  searchBookmarks,
+  searchNodes
 } from "./core.mjs";
 import { createDescriptionEditor } from "./editor.mjs";
 import { readMetadata, writeMetadata } from "./storage.mjs";
@@ -36,6 +37,7 @@ const elements = {
 };
 
 let bookmarks = [];
+let nodes = [];
 let metadata = {};
 let selectedBookmark = null;
 let selectedTarget = null;
@@ -51,7 +53,8 @@ async function loadData() {
     chrome.bookmarks.getTree(),
     readMetadata(chrome.storage.local)
   ]);
-  bookmarks = flattenBookmarks(tree);
+  nodes = flattenNodes(tree);
+  bookmarks = nodes.filter(({ type }) => type === "bookmark");
   metadata = storedMetadata;
 }
 
@@ -66,8 +69,15 @@ function displayUrl(url) {
 
 const icons = {
   edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17.25V20h2.75L17.81 8.94l-2.75-2.75L4 17.25Zm15.71-10.42a1 1 0 0 0 0-1.42l-1.12-1.12a1 1 0 0 0-1.42 0l-1.23 1.23 2.75 2.75 1.02-1.44Z"/></svg>',
-  open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7Zm5 16H5V5h6V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6h-2v6Z"/></svg>'
+  open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7Zm5 16H5V5h6V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6h-2v6Z"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H2v16h20V6H12l-2-2Zm10 14H4V8h16v10Z"/></svg>'
 };
+
+function openFolderViewer(folder) {
+  return chrome.tabs.create({
+    url: chrome.runtime.getURL(folderViewerPath(folder.id))
+  });
+}
 
 function createIconButton(icon, label, onClick) {
   const button = document.createElement("button");
@@ -102,7 +112,9 @@ async function openBookmarkUrl(bookmark) {
 function renderResults() {
   const generation = ++resultRenderGeneration;
   const query = elements.search.value;
-  const matches = searchBookmarks(bookmarks, metadata, query);
+  const matches = query.trim()
+    ? searchNodes(nodes, metadata, query)
+    : searchBookmarks(bookmarks, metadata, query);
   elements.heading.textContent = query.trim() ? "検索結果" : "最近追加したブックマーク";
   elements.results.replaceChildren();
   elements.status.textContent = matches.length ? "" : "該当するブックマークがありません";
@@ -125,9 +137,11 @@ function renderResults() {
       title.className = "result-title";
       url.className = "result-url";
       title.textContent = bookmark.title;
-      url.textContent = displayUrl(bookmark.url);
+      url.textContent = bookmark.type === "folder" ? `フォルダ｜${bookmark.folder}` : displayUrl(bookmark.url);
       identity.append(title, url);
-      actions.append(
+      if (bookmark.type === "folder") {
+        actions.append(createIconButton("folder", `${bookmark.title}を開く`, () => openFolderViewer(bookmark)));
+      } else actions.append(
         createIconButton("edit", `${bookmark.title}の説明を編集`, () => {
           navigationStack = [];
           openBookmark(bookmark, false);
@@ -162,7 +176,7 @@ function renderLinks() {
       updatedAt: Date.now()
     };
   }
-  const links = buildLinksForTarget(bookmarks, previewMetadata, selectedTarget);
+  const links = buildLinksForTarget(nodes, previewMetadata, selectedTarget);
   elements.links.replaceChildren();
   if (!links.length) {
     const empty = document.createElement("span");
@@ -182,14 +196,14 @@ function renderLinks() {
   if (selectedTarget.type === "virtual" && selectedTarget.matches.length) {
     const label = document.createElement("p");
     label.className = "match-label";
-    label.textContent = "同名のブックマーク";
+    label.textContent = "同名のノード";
     elements.links.append(label);
-    for (const bookmark of selectedTarget.matches) {
+    for (const node of selectedTarget.matches) {
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "link-chip";
-      chip.textContent = displayUrl(bookmark.url);
-      chip.addEventListener("click", () => navigateTo({ type: "bookmark", bookmark }));
+      chip.textContent = node.type === "folder" ? `${node.title}（フォルダ）` : displayUrl(node.url);
+      chip.addEventListener("click", () => navigateTo({ type: node.type, node }));
       elements.links.append(chip);
     }
   }
@@ -251,7 +265,7 @@ function ensureDescriptionEditor() {
           updatedAt: Date.now()
         };
       }
-      return buildLinkSuggestions(bookmarks, currentMetadata);
+      return buildLinkSuggestions(nodes, currentMetadata);
     },
     onChange(value) {
       elements.description.value = value;
@@ -292,7 +306,7 @@ async function finishEditing() {
 
 function openBookmark(bookmark, edit = false) {
   resultRenderGeneration += 1;
-  selectedTarget = { type: "bookmark", bookmark };
+  selectedTarget = { type: "bookmark", node: bookmark };
   selectedBookmark = bookmark;
   elements.title.textContent = bookmark.title;
   elements.title.hidden = false;
@@ -336,7 +350,10 @@ function openVirtual(target) {
 }
 
 function showTarget(target) {
-  if (target.type === "bookmark") openBookmark(target.bookmark, false);
+  if (target.type === "bookmark") openBookmark(target.node, false);
+  else if (target.type === "folder") {
+    openFolderViewer(target.node);
+  }
   else openVirtual(target);
 }
 
@@ -347,7 +364,7 @@ async function navigateTo(target) {
 }
 
 async function followLink(title) {
-  await navigateTo(resolveLinkTarget(title, bookmarks));
+  await navigateTo(resolveLinkTarget(title, nodes));
 }
 
 async function closeDetail() {
@@ -502,7 +519,8 @@ async function flushSave() {
 
 async function refreshBookmarks() {
   const tree = await chrome.bookmarks.getTree();
-  bookmarks = flattenBookmarks(tree);
+  nodes = flattenNodes(tree);
+  bookmarks = nodes.filter(({ type }) => type === "bookmark");
   if (!elements.listView.hidden) renderResults();
 }
 

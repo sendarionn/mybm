@@ -1,0 +1,54 @@
+.viewer-body {
+  width: auto;
+  min-height: 100vh;
+  max-height: none;
+}
+
+.viewer {
+  width: min(920px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 28px 0 48px;
+}
+
+.viewer-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.viewer-home { color: #5f6368; font-size: 13px; text-decoration: none; }
+.viewer-home:hover { color: #1a73e8; }
+.folder-mark { color: #f9ab00; font-size: 28px; line-height: 1; }
+.folder-path { margin-top: 5px; color: #5f6368; font-size: 12px; }
+
+.viewer h2 { margin: 22px 0 8px; }
+.viewer-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.node-list { display: grid; gap: 5px; }
+
+.node-button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.node-button:hover, .node-button:focus-visible { background: #f1f3f4; }
+.node-kind { width: 24px; color: #f9ab00; }
+.node-empty { padding: 8px 10px; color: #9aa0a6; font-size: 13px; }
+.viewer-status { padding: 48px 24px; color: #5f6368; text-align: center; }
+
+@media (max-width: 680px) {
+  .viewer-columns { grid-template-columns: 1fr; gap: 0; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .viewer-home, .folder-path, .viewer-status { color: #9aa0a6; }
+  .node-button:hover, .node-button:focus-visible { background: #303134; }
+}

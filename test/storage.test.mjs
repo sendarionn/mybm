@@ -4,6 +4,7 @@ import {
   METADATA_SCHEMA_VERSION,
   preserveMetadataForUpdate,
   readMetadata,
+  removeMetadataEntries,
   resolveStoredMetadata,
   writeMetadata
 } from "../storage.mjs";
@@ -70,4 +71,21 @@ test("全メモ削除時も非空のバックアップを保持する", async ()
   assert.deepEqual(storage.values.metadata, {});
   assert.deepEqual(storage.values.metadataBackup, backup);
   assert.equal(storage.values.metadataEmptyIsIntentional, true);
+});
+
+test("フォルダIDでも説明文を保存して再表示できる", async () => {
+  const storage = createStorage();
+  const metadata = { folder_1: { bookmarkId: "folder_1", description: "フォルダの説明", updatedAt: 1 } };
+  await writeMetadata(storage, metadata);
+  assert.deepEqual(await readMetadata(storage), metadata);
+});
+
+test("削除フォルダと配下ノードのメタデータだけを整理する", () => {
+  const metadata = {
+    folder: { description: "親" },
+    child: { description: "子" },
+    keep: { description: "維持" }
+  };
+  assert.equal(removeMetadataEntries(metadata, ["folder", "child"]), true);
+  assert.deepEqual(metadata, { keep: { description: "維持" } });
 });
