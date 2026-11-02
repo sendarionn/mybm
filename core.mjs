@@ -279,6 +279,25 @@ export function childNodes(nodes, folderId) {
   return nodes.filter(({ parentId }) => parentId === folderId);
 }
 
+export function descendantNodes(nodes, folderId) {
+  const descendants = [];
+  const pending = [folderId];
+  while (pending.length) {
+    const parentId = pending.shift();
+    for (const node of childNodes(nodes, parentId)) {
+      descendants.push(node);
+      if (node.type === "folder") pending.push(node.id);
+    }
+  }
+  return descendants;
+}
+
+export function searchFolderNodes(nodes, metadata, folderId, query) {
+  return query.trim()
+    ? searchNodes(descendantNodes(nodes, folderId), metadata, query)
+    : childNodes(nodes, folderId);
+}
+
 /*
  * Chromeのツリーを正本とし、mybmでは検索と表示に必要な平坦な参照だけを作る
  */
@@ -298,8 +317,13 @@ export function removedNodeIds(id, node = {}) {
   return ids;
 }
 
-export function folderViewerPath(folderId) {
-  return `viewer.html?folderId=${encodeURIComponent(folderId)}`;
+export function pendingFolderTargetKey(windowId) {
+  return `pendingFolderTarget:${windowId}`;
+}
+
+export function isPendingFolderTargetFresh(target, now = Date.now(), lifetime = 30000) {
+  return Boolean(target?.folderId && Number.isFinite(target.createdAt)
+    && now - target.createdAt >= 0 && now - target.createdAt <= lifetime);
 }
 
 function normalize(value) {

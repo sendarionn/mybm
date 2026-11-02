@@ -1,14 +1,16 @@
 import {
   flattenNodes,
-  folderViewerPath,
   buildLinksForTarget,
   buildLinkSuggestions,
   bookmarkletSource,
   isBookmarkletUrl,
   parseDescriptionLines,
   mergeRenamedLinksIntoEditedDescription,
+  isPendingFolderTargetFresh,
+  pendingFolderTargetKey,
   resolveLinkedLabel,
   searchBookmarks,
+  searchFolderNodes,
   searchNodes
 } from "./core.mjs";
 import { createDescriptionEditor } from "./editor.mjs";
@@ -33,6 +35,10 @@ const elements = {
   descriptionPreview: document.querySelector("#description-preview"),
   descriptionEditor: document.querySelector("#description-editor"),
   description: document.querySelector("#description"),
+  folderContents: document.querySelector("#folder-contents"),
+  folderSearch: document.querySelector("#folder-search"),
+  folderStatus: document.querySelector("#folder-status"),
+  folderResults: document.querySelector("#folder-results"),
   links: document.querySelector("#links"),
   saveStatus: document.querySelector("#save-status")
 };
@@ -40,7 +46,7 @@ const elements = {
 let bookmarks = [];
 let nodes = [];
 let metadata = {};
-let selectedBookmark = null;
+let selectedNode = null;
 let selectedTarget = null;
 let navigationStack = [];
 let saveTimer = null;
@@ -59,6 +65,26 @@ async function loadData() {
   metadata = storedMetadata;
 }
 
+async function consumePendingFolderTarget() {
+  const currentWindow = await chrome.windows.getCurrent();
+  const key = pendingFolderTargetKey(currentWindow.id);
+  const stored = await chrome.storage.session.get(key);
+  await chrome.storage.session.remove(key);
+  const pending = stored[key];
+  if (!isPendingFolderTargetFresh(pending)) return false;
+  const folder = nodes.find(({ id, type }) => id === pending.folderId && type === "folder");
+  if (!folder) {
+    elements.status.textContent = "指定されたフォルダが削除されたか、存在しません";
+    return false;
+  }
+  navigationStack = [];
+  openNode(folder, false);
+  if (pending.openError) {
+    elements.saveStatus.textContent = "Omniboxから自動で開けませんでした　ツールバーから開いています";
+  }
+  return true;
+}
+
 function displayUrl(url) {
   try {
     const parsed = new URL(url);
@@ -73,12 +99,6 @@ const icons = {
   open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7Zm5 16H5V5h6V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6h-2v6Z"/></svg>',
   folder: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H2v16h20V6H12l-2-2Zm10 14H4V8h16v10Z"/></svg>'
 };
-
-function openFolderViewer(folder) {
-  return chrome.tabs.create({
-    url: chrome.runtime.getURL(folderViewerPath(folder.id))
-  });
-}
 
 function createIconButton(icon, label, onClick) {
   const button = document.createElement("button");
@@ -118,7 +138,7 @@ function renderResults() {
     : searchBookmarks(bookmarks, metadata, query);
   elements.heading.textContent = query.trim() ? "検索結果" : "最近追加したブックマーク";
   elements.results.replaceChildren();
-  elements.status.textContent = matches.length ? "" : "該当するブックマークがありません";
+  elements.status.textContent = matches.length ? "" : "該当する項目がありません";
   let offset = 0;
   const appendBatch = () => {
     if (generation !== resultRenderGeneration) return;
@@ -141,11 +161,24 @@ function renderResults() {
       url.textContent = bookmark.type === "folder" ? `フォルダ｜${bookmark.folder}` : displayUrl(bookmark.url);
       identity.append(title, url);
       if (bookmark.type === "folder") {
-        actions.append(createIconButton("folder", `${bookmark.title}を開く`, () => openFolderViewer(bookmark)));
+        const openFolder = () => {
+          navigationStack = [];
+          openNode(bookmark, false);
+        };
+        identity.tabIndex = 0;
+        identity.setAttribute("role", "button");
+        identity.classList.add("folder-identity");
+        identity.addEventListener("click", openFolder);
+        identity.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") openFolder();
+        });
+        actions.append(createIconButton("folder", `${bookmark.title}を開く`, () => {
+          openFolder();
+        }));
       } else actions.append(
         createIconButton("edit", `${bookmark.title}の説明を編集`, () => {
           navigationStack = [];
-          openBookmark(bookmark, false);
+          openNode(bookmark, false);
         }),
         createIconButton("open", isBookmarkletUrl(bookmark.url)
           ? `${bookmark.title}を現在のタブで実行`
@@ -170,10 +203,10 @@ function renderResults() {
 function renderLinks() {
   if (!selectedTarget) return;
   const previewMetadata = { ...metadata };
-  if (selectedBookmark) {
-    previewMetadata[selectedBookmark.id] = {
-      ...metadata[selectedBookmark.id],
-      bookmarkId: selectedBookmark.id,
+  if (selectedNode) {
+    previewMetadata[selectedNode.id] = {
+      ...metadata[selectedNode.id],
+      bookmarkId: selectedNode.id,
       description: elements.description.value,
       updatedAt: Date.now()
     };
@@ -260,10 +293,10 @@ function ensureDescriptionEditor() {
   descriptionEditor = createDescriptionEditor(elements.descriptionEditor, {
     getLinkSuggestions() {
       const currentMetadata = { ...metadata };
-      if (selectedBookmark) {
-        currentMetadata[selectedBookmark.id] = {
-          ...metadata[selectedBookmark.id],
-          bookmarkId: selectedBookmark.id,
+      if (selectedNode) {
+        currentMetadata[selectedNode.id] = {
+          ...metadata[selectedNode.id],
+          bookmarkId: selectedNode.id,
           description: elements.description.value,
           updatedAt: Date.now()
         };
@@ -281,7 +314,7 @@ function ensureDescriptionEditor() {
 }
 
 function startEditing(lineIndex = null) {
-  if (!selectedBookmark) return;
+  if (!selectedNode) return;
   elements.editorSurface.classList.add("editing");
   elements.descriptionPreview.hidden = true;
   elements.description.hidden = true;
@@ -307,20 +340,76 @@ async function finishEditing() {
   elements.descriptionPreview.hidden = false;
 }
 
-function openBookmark(bookmark, edit = false) {
+function renderFolderContents() {
+  elements.folderResults.replaceChildren();
+  if (selectedNode?.type !== "folder") return;
+  const query = elements.folderSearch.value;
+  const matches = searchFolderNodes(nodes, metadata, selectedNode.id, query);
+  elements.folderStatus.textContent = matches.length ? "" : "該当する項目がありません";
+  for (const node of matches) {
+    const item = document.createElement("li");
+    const row = document.createElement("div");
+    const identity = document.createElement("button");
+    const actions = document.createElement("div");
+    const title = document.createElement("span");
+    const path = document.createElement("span");
+    row.className = "result-row";
+    identity.type = "button";
+    identity.className = "result-identity-button";
+    actions.className = "result-actions";
+    title.className = "result-title";
+    path.className = "folder-result-path";
+    title.textContent = node.title;
+    path.textContent = `${node.type === "folder" ? "フォルダ" : "ブックマーク"}｜${node.folder}`;
+    identity.append(title, path);
+    if (node.type === "folder") {
+      identity.addEventListener("click", () => navigateTo({ type: "folder", node }));
+      actions.append(createIconButton("folder", `${node.title}を開く`, () => navigateTo({ type: "folder", node })));
+    } else {
+      identity.addEventListener("click", async () => {
+        try {
+          await openBookmarkUrl(node);
+        } catch (error) {
+          elements.folderStatus.textContent = `実行できませんでした: ${error.message}`;
+        }
+      });
+      actions.append(
+        createIconButton("edit", `${node.title}の説明を編集`, () => navigateTo({ type: "bookmark", node })),
+        createIconButton("open", `${node.title}を開く`, async () => {
+          try {
+            await openBookmarkUrl(node);
+          } catch (error) {
+            elements.folderStatus.textContent = `実行できませんでした: ${error.message}`;
+          }
+        })
+      );
+    }
+    row.append(identity, actions);
+    item.append(row);
+    elements.folderResults.append(item);
+  }
+}
+
+function openNode(node, edit = false) {
   resultRenderGeneration += 1;
-  selectedTarget = { type: "bookmark", node: bookmark };
-  selectedBookmark = bookmark;
-  elements.title.textContent = bookmark.title;
+  selectedTarget = { type: node.type, node };
+  selectedNode = node;
+  elements.title.textContent = node.title;
   elements.title.hidden = false;
   elements.titleEditor.hidden = true;
-  elements.titleEditor.value = bookmark.title;
-  elements.url.value = displayUrl(bookmark.url);
+  elements.titleEditor.value = node.title;
+  elements.url.value = node.type === "bookmark" ? displayUrl(node.url) : "";
   elements.url.readOnly = true;
   elements.url.classList.remove("editing");
-  elements.url.hidden = false;
+  elements.url.hidden = node.type !== "bookmark";
   elements.descriptionArea.hidden = false;
-  elements.description.value = metadata[bookmark.id]?.description || "";
+  elements.description.value = metadata[node.id]?.description || "";
+  elements.folderContents.hidden = node.type !== "folder";
+  elements.folderSearch.value = "";
+  if (node.type === "folder") {
+    elements.folderSearch.placeholder = `「${node.title}」内を検索`;
+    renderFolderContents();
+  }
   elements.saveStatus.textContent = "";
   elements.editorSurface.classList.toggle("editing", edit);
   renderDescription();
@@ -340,12 +429,13 @@ function openBookmark(bookmark, edit = false) {
 function openVirtual(target) {
   resultRenderGeneration += 1;
   selectedTarget = target;
-  selectedBookmark = null;
+  selectedNode = null;
   elements.title.textContent = target.title;
   elements.title.hidden = false;
   elements.titleEditor.hidden = true;
   elements.url.hidden = true;
   elements.descriptionArea.hidden = true;
+  elements.folderContents.hidden = true;
   elements.saveStatus.textContent = "";
   elements.listView.hidden = true;
   elements.detailView.hidden = false;
@@ -353,31 +443,38 @@ function openVirtual(target) {
 }
 
 function showTarget(target) {
-  if (target.type === "bookmark") openBookmark(target.node, false);
-  else if (target.type === "folder") {
-    openFolderViewer(target.node);
-  }
+  if (target.type === "bookmark" || target.type === "folder") openNode(target.node, false);
   else openVirtual(target);
 }
 
 async function navigateTo(target) {
   await flushSave();
-  if (selectedTarget) navigationStack.push(selectedTarget);
+  if (selectedTarget) {
+    navigationStack.push({
+      target: selectedTarget,
+      folderQuery: selectedNode?.type === "folder" ? elements.folderSearch.value : ""
+    });
+  }
   showTarget(target);
 }
 
 async function followLink(title) {
-  const entry = selectedBookmark ? metadata[selectedBookmark.id] : null;
+  const entry = selectedNode ? metadata[selectedNode.id] : null;
   await navigateTo(resolveLinkedLabel(title, entry, nodes));
 }
 
 async function closeDetail() {
   await flushSave();
   if (navigationStack.length) {
-    showTarget(navigationStack.pop());
+    const previous = navigationStack.pop();
+    showTarget(previous.target);
+    if (selectedNode?.type === "folder") {
+      elements.folderSearch.value = previous.folderQuery;
+      renderFolderContents();
+    }
     return;
   }
-  selectedBookmark = null;
+  selectedNode = null;
   selectedTarget = null;
   elements.detailView.hidden = true;
   elements.listView.hidden = false;
@@ -388,7 +485,7 @@ async function closeDetail() {
 async function goHome() {
   await flushSave();
   navigationStack = [];
-  selectedBookmark = null;
+  selectedNode = null;
   selectedTarget = null;
   elements.detailView.hidden = true;
   elements.listView.hidden = false;
@@ -397,8 +494,8 @@ async function goHome() {
 }
 
 function startTitleEditing() {
-  if (!selectedBookmark) return;
-  elements.titleEditor.value = selectedBookmark.title;
+  if (!selectedNode) return;
+  elements.titleEditor.value = selectedNode.title;
   elements.title.hidden = true;
   elements.titleEditor.hidden = false;
   elements.titleEditor.focus();
@@ -411,20 +508,23 @@ function cancelTitleEditing() {
 }
 
 async function finishTitleEditing() {
-  if (elements.titleEditor.hidden || !selectedBookmark) return;
+  if (elements.titleEditor.hidden || !selectedNode) return;
   const title = elements.titleEditor.value.trim();
-  if (!title || title === selectedBookmark.title) {
+  if (!title || title === selectedNode.title) {
     cancelTitleEditing();
     return;
   }
 
-  const bookmarkId = selectedBookmark.id;
+  const bookmarkId = selectedNode.id;
   elements.titleEditor.hidden = true;
   elements.title.hidden = false;
   try {
     const updated = await chrome.bookmarks.update(bookmarkId, { title });
-    selectedBookmark.title = updated.title;
+    selectedNode.title = updated.title;
     elements.title.textContent = updated.title;
+    if (selectedNode.type === "folder") {
+      elements.folderSearch.placeholder = `「${updated.title}」内を検索`;
+    }
     elements.saveStatus.textContent = "タイトルを保存しました";
   } catch {
     elements.saveStatus.textContent = "タイトルを保存できませんでした";
@@ -434,8 +534,8 @@ async function finishTitleEditing() {
 }
 
 function startUrlEditing() {
-  if (!selectedBookmark || !elements.url.readOnly) return;
-  elements.url.value = selectedBookmark.url;
+  if (selectedNode?.type !== "bookmark" || !elements.url.readOnly) return;
+  elements.url.value = selectedNode.url;
   elements.url.readOnly = false;
   elements.url.classList.add("editing");
   elements.url.focus();
@@ -445,40 +545,40 @@ function startUrlEditing() {
 function cancelUrlEditing() {
   elements.url.readOnly = true;
   elements.url.classList.remove("editing");
-  if (selectedBookmark) elements.url.value = displayUrl(selectedBookmark.url);
+  if (selectedNode?.type === "bookmark") elements.url.value = displayUrl(selectedNode.url);
 }
 
 async function finishUrlEditing() {
-  if (elements.url.readOnly || !selectedBookmark) return;
+  if (elements.url.readOnly || selectedNode?.type !== "bookmark") return;
   const url = elements.url.value.trim();
-  if (!url || url === selectedBookmark.url) {
+  if (!url || url === selectedNode.url) {
     cancelUrlEditing();
     return;
   }
 
-  const bookmarkId = selectedBookmark.id;
+  const bookmarkId = selectedNode.id;
   elements.url.readOnly = true;
   elements.url.classList.remove("editing");
   try {
     const updated = await chrome.bookmarks.update(bookmarkId, { url });
-    selectedBookmark.url = updated.url;
+    selectedNode.url = updated.url;
     elements.url.value = displayUrl(updated.url);
     elements.saveStatus.textContent = "URLを保存しました";
   } catch {
-    elements.url.value = displayUrl(selectedBookmark.url);
+    elements.url.value = displayUrl(selectedNode.url);
     elements.saveStatus.textContent = "URLを保存できませんでした";
   }
 }
 
 async function saveDescription() {
-  if (!selectedBookmark) return;
+  if (!selectedNode) return;
   if (saving) {
     saveAgain = true;
     return;
   }
 
   saving = true;
-  const bookmarkId = selectedBookmark.id;
+  const bookmarkId = selectedNode.id;
   const description = elements.description.value;
   try {
     const response = await chrome.runtime.sendMessage({
@@ -489,7 +589,7 @@ async function saveDescription() {
     });
     if (response?.conflict) {
       if (response.entry) metadata[bookmarkId] = response.entry;
-      if (selectedBookmark?.id === bookmarkId) {
+      if (selectedNode?.id === bookmarkId) {
         elements.saveStatus.textContent = "名称変更との競合を確認してください";
       }
       return;
@@ -497,9 +597,9 @@ async function saveDescription() {
     if (!response?.ok) throw new Error("save failed");
     if (response.entry) metadata[bookmarkId] = response.entry;
     else delete metadata[bookmarkId];
-    if (selectedBookmark?.id === bookmarkId) elements.saveStatus.textContent = "保存済み";
+    if (selectedNode?.id === bookmarkId) elements.saveStatus.textContent = "保存済み";
   } catch {
-    if (selectedBookmark?.id === bookmarkId) elements.saveStatus.textContent = "未保存";
+    if (selectedNode?.id === bookmarkId) elements.saveStatus.textContent = "未保存";
   } finally {
     saving = false;
     if (saveAgain) {
@@ -518,7 +618,7 @@ function applyLinkedNodeRename(message) {
       updatedAt: change.updatedAt,
       revision: change.revision
     };
-    if (selectedBookmark?.id !== change.sourceId) continue;
+    if (selectedNode?.id !== change.sourceId) continue;
     const current = elements.description.value;
     const merged = mergeRenamedLinksIntoEditedDescription(
       change.beforeDescription,
@@ -543,12 +643,13 @@ function applyLinkedNodeRename(message) {
       elements.saveStatus.textContent = "名称変更との競合を確認してください";
     }
   }
-  if (!selectedBookmark) renderLinks();
+  if (!selectedNode) renderLinks();
   if (!elements.listView.hidden) renderResults();
+  if (selectedNode?.type === "folder") renderFolderContents();
 }
 
 function scheduleSave() {
-  if (!selectedBookmark) return;
+  if (!selectedNode) return;
   clearTimeout(saveTimer);
   elements.saveStatus.textContent = "未保存";
   saveTimer = setTimeout(() => {
@@ -568,20 +669,34 @@ async function refreshBookmarks() {
   const tree = await chrome.bookmarks.getTree();
   nodes = flattenNodes(tree);
   bookmarks = nodes.filter(({ type }) => type === "bookmark");
-  if (selectedBookmark) {
-    const latest = bookmarks.find(({ id }) => id === selectedBookmark.id);
+  if (selectedNode) {
+    const latest = nodes.find(({ id }) => id === selectedNode.id);
     if (latest) {
-      selectedBookmark = latest;
-      selectedTarget = { type: "bookmark", node: latest };
+      selectedNode = latest;
+      selectedTarget = { type: latest.type, node: latest };
       if (elements.titleEditor.hidden) elements.title.textContent = latest.title;
-      if (elements.url.readOnly) elements.url.value = displayUrl(latest.url);
+      if (latest.type === "bookmark" && elements.url.readOnly) elements.url.value = displayUrl(latest.url);
+      if (latest.type === "folder") {
+        elements.folderSearch.placeholder = `「${latest.title}」内を検索`;
+        renderFolderContents();
+      }
       renderLinks();
+    } else {
+      navigationStack = [];
+      selectedNode = null;
+      selectedTarget = null;
+      elements.detailView.hidden = true;
+      elements.listView.hidden = false;
+      renderResults();
+      elements.status.textContent = "表示中の項目が削除されました";
+      return;
     }
   }
   if (!elements.listView.hidden) renderResults();
 }
 
 elements.search.addEventListener("input", renderResults);
+elements.folderSearch.addEventListener("input", renderFolderContents);
 elements.home.addEventListener("click", goHome);
 elements.back.addEventListener("click", () => closeDetail());
 elements.title.addEventListener("click", startTitleEditing);
@@ -638,9 +753,12 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 loadData()
-  .then(() => {
-    renderResults();
-    elements.search.focus();
+  .then(async () => {
+    const openedFolder = await consumePendingFolderTarget();
+    if (!openedFolder) {
+      renderResults();
+      elements.search.focus();
+    }
   })
   .catch(() => {
     elements.status.textContent = "ブックマークを読み込めませんでした";

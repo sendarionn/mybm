@@ -1,11 +1,11 @@
 import {
   bookmarkletSource,
   buildOmniboxSuggestions,
-  folderViewerPath,
   flattenNodes,
   isBookmarkletUrl,
   metadataEntryForDescription,
   migrateMetadataLinkReferences,
+  pendingFolderTargetKey,
   renameMetadataLinks,
   removedNodeIds,
   resolveOmniboxNode
@@ -82,15 +82,19 @@ async function openBookmark(bookmark, disposition) {
 }
 
 async function openFolder(folder, disposition) {
-  const url = chrome.runtime.getURL(folderViewerPath(folder.id));
-  if (disposition === "currentTab") {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      await chrome.tabs.update(tab.id, { url });
-      return;
-    }
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!Number.isInteger(tab?.windowId)) throw new Error("ポップアップを開くウィンドウがありません");
+  const key = pendingFolderTargetKey(tab.windowId);
+  const pending = { folderId: folder.id, createdAt: Date.now(), disposition };
+  await chrome.storage.session.set({ [key]: pending });
+  try {
+    await chrome.action.openPopup({ windowId: tab.windowId });
+  } catch (error) {
+    await chrome.storage.session.set({
+      [key]: { ...pending, openError: true }
+    });
+    throw error;
   }
-  await chrome.tabs.create({ url, active: disposition !== "newBackgroundTab" });
 }
 
 chrome.omnibox.setDefaultSuggestion({ description: "mybmでブックマークを検索" });

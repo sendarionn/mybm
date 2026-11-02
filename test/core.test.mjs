@@ -4,8 +4,10 @@ import {
   extractLinks,
   flattenBookmarks,
   flattenNodes,
-  folderViewerPath,
+  isPendingFolderTargetFresh,
+  pendingFolderTargetKey,
   childNodes,
+  descendantNodes,
   buildLinkGraph,
   buildLinksForTarget,
   metadataEntryForDescription,
@@ -34,6 +36,7 @@ import {
   resolveOmniboxNode,
   searchBookmarks,
   searchNodes,
+  searchFolderNodes,
   shouldInsertIndent
 } from "../core.mjs";
 import {
@@ -72,6 +75,21 @@ test("Chromeフォルダを親子関係を保った共通ノードへ変換す�
   assert.deepEqual(childNodes(nodes, "f").map(({ id }) => id), ["1"]);
 });
 
+test("フォルダ内検索は子孫だけを既存検索順位で検索する", () => {
+  const nodes = [
+    { id: "root", type: "folder", title: "開発", parentId: "0", url: "" },
+    { id: "direct", type: "bookmark", title: "GitHub", parentId: "root", url: "https://github.com", dateAdded: 1 },
+    { id: "child", type: "folder", title: "エディタ", parentId: "root", url: "" },
+    { id: "grandchild", type: "bookmark", title: "VS Code", parentId: "child", url: "https://code.visualstudio.com", dateAdded: 2 },
+    { id: "outside", type: "bookmark", title: "VS Code outside", parentId: "other", url: "https://outside.example", dateAdded: 3 }
+  ];
+  const metadata = { grandchild: { description: "[開発環境]" } };
+  assert.deepEqual(descendantNodes(nodes, "root").map(({ id }) => id), ["direct", "child", "grandchild"]);
+  assert.deepEqual(searchFolderNodes(nodes, metadata, "root", "VS Code").map(({ id }) => id), ["grandchild"]);
+  assert.deepEqual(searchFolderNodes(nodes, metadata, "root", "開発環境").map(({ id }) => id), ["grandchild"]);
+  assert.deepEqual(searchFolderNodes(nodes, metadata, "root", "").map(({ id }) => id), ["direct", "child"]);
+});
+
 test("フォルダの移動と名称変更後も同じIDでメタデータを参照する", () => {
   const before = flattenNodes([{ id: "0", title: "", children: [{ id: "f", title: "旧名" }] }]);
   const after = flattenNodes([{ id: "0", title: "", children: [{ id: "p", title: "親", children: [{ id: "f", title: "新名" }] }] }]);
@@ -87,8 +105,11 @@ test("削除フォルダと配下ノードのIDを再帰的に収集する", () 
   }), ["f", "c", "b"]);
 });
 
-test("フォルダIDをビューワーURLへ安全に埋め込む", () => {
-  assert.equal(folderViewerPath("id / 日本語"), "viewer.html?folderId=id%20%2F%20%E6%97%A5%E6%9C%AC%E8%AA%9E");
+test("Omniboxの一時フォルダ指定をウィンドウ別かつ期限付きで扱う", () => {
+  assert.equal(pendingFolderTargetKey(42), "pendingFolderTarget:42");
+  assert.equal(isPendingFolderTargetFresh({ folderId: "f", createdAt: 1000 }, 2000), true);
+  assert.equal(isPendingFolderTargetFresh({ folderId: "f", createdAt: 1000 }, 32000), false);
+  assert.equal(isPendingFolderTargetFresh(null, 2000), false);
 });
 
 test("未検索時は追加日時の新しい順になる", () => {
