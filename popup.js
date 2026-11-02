@@ -406,6 +406,7 @@ function openNode(node, edit = false) {
   elements.descriptionArea.hidden = false;
   elements.description.value = metadata[node.id]?.description || "";
   lastSubmittedDescriptions.set(node.id, elements.description.value);
+  elements.editorSurface.classList.toggle("folder-description", node.type === "folder");
   elements.folderContents.hidden = node.type !== "folder";
   elements.folderSearch.value = "";
   if (node.type === "folder") {
@@ -425,6 +426,13 @@ function openNode(node, edit = false) {
     const editor = ensureDescriptionEditor();
     editor.setValue(elements.description.value);
     requestAnimationFrame(() => editor.focus());
+  } else if (node.type === "folder") {
+    const folderId = node.id;
+    requestAnimationFrame(() => {
+      if (selectedNode?.id === folderId && !elements.folderContents.hidden) {
+        elements.folderSearch.focus({ preventScroll: true });
+      }
+    });
   }
 }
 
@@ -437,6 +445,7 @@ function openVirtual(target) {
   elements.titleEditor.hidden = true;
   elements.url.hidden = true;
   elements.descriptionArea.hidden = true;
+  elements.editorSurface.classList.remove("folder-description");
   elements.folderContents.hidden = true;
   elements.saveStatus.textContent = "";
   elements.listView.hidden = true;

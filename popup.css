@@ -312,6 +312,29 @@ textarea {
 
 .description-preview:focus-visible { outline: 2px solid #1a73e8; }
 
+.editor-surface.folder-description { min-height: 0; }
+
+.folder-description .description-preview {
+  min-height: calc(1.55em + 24px);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.folder-description .description-editor {
+  min-height: 0;
+  max-height: 220px;
+}
+
+.folder-description .description-editor .cm-editor {
+  min-height: 0 !important;
+  max-height: 220px;
+}
+
+.folder-description .description-editor .cm-scroller {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 .description-line {
   position: relative;
   min-height: 1.55em;
