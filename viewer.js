@@ -5,16 +5,18 @@ import {
   flattenNodes,
   folderViewerPath,
   isBookmarkletUrl,
+  mergeRenamedLinksIntoEditedDescription,
   nodeById,
-  resolveLinkTarget
+  resolveLinkedLabel
 } from "./core.mjs";
 import { createDescriptionEditor } from "./editor.mjs";
-import { readMetadata, writeMetadata } from "./storage.mjs";
+import { readMetadata } from "./storage.mjs";
 
 const elements = {
   viewer: document.querySelector("#viewer"),
   status: document.querySelector("#viewer-status"),
   title: document.querySelector("#folder-title"),
+  titleEditor: document.querySelector("#folder-title-editor"),
   path: document.querySelector("#folder-path"),
   editor: document.querySelector("#description-editor"),
   saveStatus: document.querySelector("#save-status"),
@@ -29,6 +31,8 @@ let folder = null;
 let editor = null;
 let saveTimer = null;
 let pendingDescription = null;
+let currentDescription = "";
+let savedRevision = 0;
 
 function folderIdFromLocation() {
   return new URL(location.href).searchParams.get("folderId");
@@ -42,6 +46,40 @@ function showError(message) {
   elements.viewer.hidden = true;
   elements.status.hidden = false;
   elements.status.textContent = message;
+}
+
+function startTitleEditing() {
+  if (!folder) return;
+  elements.titleEditor.value = folder.title;
+  elements.title.hidden = true;
+  elements.titleEditor.hidden = false;
+  elements.titleEditor.focus();
+  elements.titleEditor.select();
+}
+
+function cancelTitleEditing() {
+  elements.titleEditor.hidden = true;
+  elements.title.hidden = false;
+}
+
+async function finishTitleEditing() {
+  if (!folder || elements.titleEditor.hidden) return;
+  const title = elements.titleEditor.value.trim();
+  if (!title || title === folder.title) {
+    cancelTitleEditing();
+    return;
+  }
+  await flushSave();
+  try {
+    await chrome.bookmarks.update(folder.id, { title });
+    folder.title = title;
+    elements.title.textContent = title;
+    document.title = `${title} - mybm`;
+  } catch {
+    elements.saveStatus.textContent = "フォルダ名を保存できませんでした";
+  } finally {
+    cancelTitleEditing();
+  }
 }
 
 function nodeButton(node, label, onClick) {
@@ -126,20 +164,32 @@ function renderLinks() {
     button.type = "button";
     button.className = "link-chip";
     button.textContent = link;
-    button.addEventListener("click", () => openTarget(resolveLinkTarget(link, nodes)));
+    button.addEventListener("click", () => openTarget(resolveLinkedLabel(link, metadata[folder.id], nodes)));
     elements.links.append(button);
   }
 }
 
 async function saveDescription(value) {
   if (!folder) return;
-  if (value) {
-    metadata[folder.id] = { bookmarkId: folder.id, description: value, updatedAt: Date.now() };
-  } else {
-    delete metadata[folder.id];
-  }
   try {
-    await writeMetadata(chrome.storage.local, metadata);
+    const response = await chrome.runtime.sendMessage({
+      type: "saveMetadataEntry",
+      nodeId: folder.id,
+      description: value,
+      baseRevision: savedRevision
+    });
+    if (response?.conflict) {
+      if (response.entry) {
+        metadata[folder.id] = response.entry;
+        savedRevision = response.entry.revision || 0;
+      }
+      elements.saveStatus.textContent = "名称変更との競合を確認してください";
+      return;
+    }
+    if (!response?.ok) throw new Error("save failed");
+    if (response.entry) metadata[folder.id] = response.entry;
+    else delete metadata[folder.id];
+    savedRevision = response.entry?.revision || 0;
     elements.saveStatus.textContent = "保存済み";
   } catch {
     elements.saveStatus.textContent = "未保存";
@@ -173,16 +223,63 @@ function ensureEditor() {
     getLinkSuggestions: () => buildLinkSuggestions(nodes, metadata),
     onChange(value) {
       if (!folder) return;
-      if (value) metadata[folder.id] = { bookmarkId: folder.id, description: value, updatedAt: Date.now() };
-      else delete metadata[folder.id];
+      currentDescription = value;
+      metadata[folder.id] = {
+        ...metadata[folder.id],
+        bookmarkId: folder.id,
+        description: value,
+        updatedAt: Date.now()
+      };
       renderLinks();
       scheduleSave(value);
     },
     onLink(label) {
-      openTarget(resolveLinkTarget(label, nodes));
+      openTarget(resolveLinkedLabel(label, metadata[folder.id], nodes));
     }
   });
   return editor;
+}
+
+function renderChildren() {
+  const children = childNodes(nodes, folder.id);
+  renderNodeList(elements.folders, children.filter(({ type }) => type === "folder"), "子フォルダなし", navigateFolder);
+  renderNodeList(elements.bookmarks, children.filter(({ type }) => type === "bookmark"), "ブックマークなし", openBookmark);
+}
+
+function applyLinkedNodeRename(message) {
+  for (const change of message.changes || []) {
+    metadata[change.sourceId] = {
+      ...metadata[change.sourceId],
+      description: change.afterDescription,
+      linkReferences: change.linkReferences,
+      updatedAt: change.updatedAt,
+      revision: change.revision
+    };
+    if (folder?.id !== change.sourceId) continue;
+    const merged = mergeRenamedLinksIntoEditedDescription(
+      change.beforeDescription,
+      currentDescription,
+      change.beforeLinkReferences,
+      message.targetId,
+      message.title
+    );
+    if (merged.changed) {
+      const hadUnsavedInput = currentDescription !== change.beforeDescription;
+      currentDescription = merged.description;
+      metadata[change.sourceId] = {
+        ...metadata[change.sourceId],
+        description: merged.description,
+        linkReferences: merged.linkReferences
+      };
+      savedRevision = change.revision || 0;
+      editor.setValue(currentDescription);
+      if (hadUnsavedInput) scheduleSave(currentDescription);
+      else elements.saveStatus.textContent = "リンク名を更新しました";
+    } else if (merged.conflict) {
+      elements.saveStatus.textContent = "名称変更との競合を確認してください";
+    }
+  }
+  renderLinks();
 }
 
 async function loadFolder() {
@@ -206,12 +303,13 @@ async function loadFolder() {
   elements.status.hidden = true;
   elements.viewer.hidden = false;
   elements.title.textContent = folder.title;
+  elements.titleEditor.value = folder.title;
   document.title = `${folder.title} - mybm`;
   elements.path.textContent = folder.folder;
-  ensureEditor().setValue(metadata[folder.id]?.description || "");
-  const children = childNodes(nodes, folder.id);
-  renderNodeList(elements.folders, children.filter(({ type }) => type === "folder"), "子フォルダなし", navigateFolder);
-  renderNodeList(elements.bookmarks, children.filter(({ type }) => type === "bookmark"), "ブックマークなし", openBookmark);
+  currentDescription = metadata[folder.id]?.description || "";
+  savedRevision = metadata[folder.id]?.revision || 0;
+  ensureEditor().setValue(currentDescription);
+  renderChildren();
   renderLinks();
 }
 
@@ -221,12 +319,48 @@ window.addEventListener("popstate", async () => {
 });
 for (const event of [
   chrome.bookmarks.onCreated,
-  chrome.bookmarks.onChanged,
   chrome.bookmarks.onMoved,
   chrome.bookmarks.onRemoved
 ]) event.addListener(async () => {
   await flushSave();
   loadFolder();
+});
+
+chrome.bookmarks.onChanged.addListener((id, changeInfo) => {
+  const node = nodeById(nodes, id);
+  if (!node) return;
+  if (typeof changeInfo.title === "string") node.title = changeInfo.title;
+  if (typeof changeInfo.url === "string") node.url = changeInfo.url;
+  if (folder?.id === id && typeof changeInfo.title === "string") {
+    folder.title = changeInfo.title;
+    elements.title.textContent = changeInfo.title;
+    document.title = `${changeInfo.title} - mybm`;
+  }
+  renderChildren();
+  renderLinks();
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "linkedNodeRenamed") applyLinkedNodeRename(message);
+});
+
+elements.title.addEventListener("click", startTitleEditing);
+elements.title.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    startTitleEditing();
+  }
+});
+elements.titleEditor.addEventListener("blur", finishTitleEditing);
+elements.titleEditor.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === "Enter") {
+    event.preventDefault();
+    finishTitleEditing();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    cancelTitleEditing();
+  }
 });
 
 loadFolder().catch(() => showError("フォルダを読み込めませんでした"));

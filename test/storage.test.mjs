@@ -35,6 +35,7 @@ test("更新時に旧形式を消さずバックアップとスキーマ番号�
   assert.deepEqual(storage.values.metadata, metadata);
   assert.deepEqual(storage.values.metadataBackup, metadata);
   assert.equal(storage.values.metadataSchemaVersion, METADATA_SCHEMA_VERSION);
+  assert.equal(METADATA_SCHEMA_VERSION, 2);
 });
 
 test("metadataが壊れた場合はバックアップを読み込む", () => {

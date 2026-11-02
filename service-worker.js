@@ -4,17 +4,40 @@ import {
   folderViewerPath,
   flattenNodes,
   isBookmarkletUrl,
+  metadataEntryForDescription,
+  migrateMetadataLinkReferences,
+  renameMetadataLinks,
   removedNodeIds,
   resolveOmniboxNode
 } from "./core.mjs";
 import {
-  preserveMetadataForUpdate,
   readMetadata,
   removeMetadataEntries,
   writeMetadata
 } from "./storage.mjs";
 
 let omniboxRequest = 0;
+let metadataMutationQueue = Promise.resolve();
+
+function queueMetadataMutation(task) {
+  const result = metadataMutationQueue.then(task, task);
+  metadataMutationQueue = result.catch((error) => {
+    console.error("mybm metadata mutation failed", error);
+  });
+  return result;
+}
+
+async function loadNodes() {
+  return flattenNodes(await chrome.bookmarks.getTree());
+}
+
+async function migrateMetadata() {
+  const nodes = await loadNodes();
+  const metadata = await readMetadata(chrome.storage.local);
+  const migration = migrateMetadataLinkReferences(metadata, nodes);
+  if (migration.changed) await writeMetadata(chrome.storage.local, migration.metadata);
+  return migration.metadata;
+}
 
 async function loadBookmarksAndMetadata() {
   const [tree, metadata] = await Promise.all([
@@ -98,13 +121,63 @@ chrome.omnibox.onInputEntered.addListener((text, disposition) => {
     .catch((error) => console.error("mybm omnibox open failed", error));
 });
 
-chrome.runtime.onInstalled.addListener(() => {
-  preserveMetadataForUpdate(chrome.storage.local)
-    .catch((error) => console.error("mybm metadata migration failed", error));
+chrome.runtime.onInstalled.addListener(async () => {
+  await queueMetadataMutation(migrateMetadata);
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type !== "saveMetadataEntry") return undefined;
+  return queueMetadataMutation(async () => {
+    const nodes = await loadNodes();
+    const stored = await readMetadata(chrome.storage.local);
+    const migration = migrateMetadataLinkReferences(stored, nodes);
+    const metadata = migration.metadata;
+    const currentEntry = metadata[message.nodeId] || null;
+    if ((currentEntry?.revision || 0) !== (message.baseRevision || 0)) {
+      return { ok: false, conflict: true, entry: currentEntry };
+    }
+    if (message.description) {
+      metadata[message.nodeId] = metadataEntryForDescription(
+        message.nodeId,
+        message.description,
+        nodes,
+        currentEntry
+      );
+    } else {
+      delete metadata[message.nodeId];
+    }
+    await writeMetadata(chrome.storage.local, metadata);
+    return { ok: true, entry: metadata[message.nodeId] || null };
+  });
+});
+
+chrome.bookmarks.onChanged.addListener(async (id, changeInfo) => {
+  if (typeof changeInfo.title !== "string") return;
+  await queueMetadataMutation(async () => {
+    const nodes = await loadNodes();
+    const stored = await readMetadata(chrome.storage.local);
+    const migration = migrateMetadataLinkReferences(stored, nodes);
+    const renamed = renameMetadataLinks(migration.metadata, id, changeInfo.title);
+    if (migration.changed || renamed.changes.length) {
+      await writeMetadata(chrome.storage.local, renamed.metadata);
+    }
+    if (renamed.changes.length) {
+      await chrome.runtime.sendMessage({
+        type: "linkedNodeRenamed",
+        targetId: id,
+        title: changeInfo.title,
+        changes: renamed.changes
+      }).catch(() => undefined);
+    }
+  });
 });
 
 chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
-  const metadata = await readMetadata(chrome.storage.local);
-  const changed = removeMetadataEntries(metadata, removedNodeIds(id, removeInfo.node));
-  if (changed) await writeMetadata(chrome.storage.local, metadata);
+  await queueMetadataMutation(async () => {
+    const metadata = await readMetadata(chrome.storage.local);
+    const changed = removeMetadataEntries(metadata, removedNodeIds(id, removeInfo.node));
+    if (changed) await writeMetadata(chrome.storage.local, metadata);
+  });
 });
+
+queueMetadataMutation(migrateMetadata);

@@ -34,6 +34,188 @@ export function extractLinks(description = "") {
   return links;
 }
 
+export function parseLinkOccurrences(description = "") {
+  const counts = new Map();
+  return [...description.matchAll(LINK_PATTERN)].map((match) => {
+    const label = match[1].trim();
+    const key = normalize(label);
+    const occurrence = counts.get(key) || 0;
+    counts.set(key, occurrence + 1);
+    return {
+      from: match.index,
+      to: match.index + match[0].length,
+      label,
+      key,
+      occurrence
+    };
+  }).filter(({ label }) => label);
+}
+
+function referenceKey(label, occurrence) {
+  return `${normalize(label)}\u0000${occurrence}`;
+}
+
+export function resolveLinkReferences(description, nodes, previousReferences = []) {
+  const previous = new Map(previousReferences
+    .map((reference) => [referenceKey(reference.label, reference.occurrence), reference]));
+  const references = [];
+  for (const link of parseLinkOccurrences(description)) {
+    const preserved = previous.get(referenceKey(link.label, link.occurrence));
+    if (preserved) {
+      references.push({ label: link.label, occurrence: link.occurrence, targetId: preserved.targetId });
+      continue;
+    }
+    const target = resolveLinkTarget(link.label, nodes);
+    if (target.type !== "virtual") {
+      references.push({ label: link.label, occurrence: link.occurrence, targetId: target.node.id });
+    }
+  }
+  return references;
+}
+
+export function resolveLinkedLabel(label, entry, nodes) {
+  const targetIds = new Set((entry?.linkReferences || [])
+    .filter((reference) => normalize(reference.label) === normalize(label))
+    .map(({ targetId }) => targetId));
+  if (targetIds.size === 1) {
+    const [targetId] = targetIds;
+    const node = nodeById(nodes, targetId);
+    if (node) return { type: nodeType(node), node };
+    return { type: "virtual", title: label.trim(), matches: [] };
+  }
+  return resolveLinkTarget(label, nodes);
+}
+
+export function metadataEntryForDescription(nodeId, description, nodes, previousEntry = {}) {
+  return {
+    bookmarkId: nodeId,
+    description,
+    updatedAt: Date.now(),
+    revision: (previousEntry.revision || 0) + 1,
+    linkReferences: resolveLinkReferences(description, nodes, previousEntry.linkReferences || [])
+  };
+}
+
+export function migrateMetadataLinkReferences(metadata, nodes) {
+  let changed = false;
+  const migrated = {};
+  for (const [id, entry] of Object.entries(metadata)) {
+    if (!entry?.description) {
+      migrated[id] = entry;
+      continue;
+    }
+    if (Array.isArray(entry.linkReferences)) {
+      migrated[id] = entry;
+      continue;
+    }
+    migrated[id] = {
+      ...entry,
+      linkReferences: resolveLinkReferences(entry.description, nodes)
+    };
+    changed = true;
+  }
+  return { metadata: migrated, changed };
+}
+
+export function renameLinkedReferences(description, references, targetId, newTitle) {
+  const referenceMap = new Map((references || []).map((reference) => [
+    referenceKey(reference.label, reference.occurrence),
+    reference
+  ]));
+  const links = parseLinkOccurrences(description);
+  let text = "";
+  let offset = 0;
+  let changed = false;
+  const outputLinks = [];
+
+  for (const link of links) {
+    const reference = referenceMap.get(referenceKey(link.label, link.occurrence));
+    const targeted = reference?.targetId === targetId;
+    const label = targeted ? newTitle : link.label;
+    text += description.slice(offset, link.from);
+    text += targeted ? `[${label}]` : description.slice(link.from, link.to);
+    offset = link.to;
+    if (label !== link.label) changed = true;
+    outputLinks.push({ label, targetId: reference?.targetId || null });
+  }
+  text += description.slice(offset);
+  if (!changed) return { description, linkReferences: references || [], changed: false };
+
+  const counts = new Map();
+  const linkReferences = [];
+  for (const link of outputLinks) {
+    const key = normalize(link.label);
+    const occurrence = counts.get(key) || 0;
+    counts.set(key, occurrence + 1);
+    if (link.targetId) linkReferences.push({ label: link.label, occurrence, targetId: link.targetId });
+  }
+  return { description: text, linkReferences, changed: true };
+}
+
+export function mergeRenamedLinksIntoEditedDescription(
+  baseDescription,
+  editedDescription,
+  references,
+  targetId,
+  newTitle
+) {
+  const targetedLabels = new Set((references || [])
+    .filter((reference) => reference.targetId === targetId)
+    .map((reference) => normalize(reference.label)));
+  const countLabels = (description) => {
+    const counts = new Map();
+    for (const link of parseLinkOccurrences(description)) {
+      if (targetedLabels.has(link.key)) counts.set(link.key, (counts.get(link.key) || 0) + 1);
+    }
+    return counts;
+  };
+  const baseCounts = countLabels(baseDescription);
+  const editedCounts = countLabels(editedDescription);
+  for (const label of targetedLabels) {
+    if ((baseCounts.get(label) || 0) !== (editedCounts.get(label) || 0)) {
+      return {
+        description: editedDescription,
+        linkReferences: references || [],
+        changed: false,
+        conflict: true
+      };
+    }
+  }
+  return {
+    ...renameLinkedReferences(editedDescription, references, targetId, newTitle),
+    conflict: false
+  };
+}
+
+export function renameMetadataLinks(metadata, targetId, newTitle) {
+  const updated = { ...metadata };
+  const changes = [];
+  for (const [sourceId, entry] of Object.entries(metadata)) {
+    if (!entry?.description || !Array.isArray(entry.linkReferences)) continue;
+    const result = renameLinkedReferences(entry.description, entry.linkReferences, targetId, newTitle);
+    if (!result.changed) continue;
+    const updatedAt = Date.now();
+    const revision = (entry.revision || 0) + 1;
+    updated[sourceId] = {
+      ...entry,
+      description: result.description,
+      linkReferences: result.linkReferences,
+      updatedAt,
+      revision
+    };
+    changes.push({
+      sourceId,
+      beforeDescription: entry.description,
+      beforeLinkReferences: entry.linkReferences,
+      afterDescription: result.description,
+      linkReferences: result.linkReferences,
+      updatedAt,
+      revision
+    });
+  }
+  return { metadata: updated, changes };
+}
+
 export function buildLinkSuggestions(nodes, metadata) {
   const suggestions = [];
   const seen = new Set();
@@ -216,12 +398,22 @@ export function buildLinkGraph(nodes, metadata) {
     relations.get(key).add(label);
   };
 
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
   for (const node of nodes) {
     const sourceKey = `node:${node.id}`;
-    for (const label of extractLinks(metadata[node.id]?.description || "")) {
-      const target = resolveLinkTarget(label, nodes);
+    const entry = metadata[node.id] || {};
+    const references = new Map((entry.linkReferences || []).map((reference) => [
+      referenceKey(reference.label, reference.occurrence), reference.targetId
+    ]));
+    for (const link of parseLinkOccurrences(entry.description || "")) {
+      const targetId = references.get(referenceKey(link.label, link.occurrence));
+      const targetNode = nodesById.get(targetId);
+      const target = targetNode
+        ? { type: nodeType(targetNode), node: targetNode }
+        : targetId ? { type: "virtual", title: link.label, matches: [] }
+          : resolveLinkTarget(link.label, nodes);
       const destinationKey = targetKey(target);
-      add(sourceKey, label);
+      add(sourceKey, link.label);
       add(destinationKey, node.title);
     }
   }
@@ -240,14 +432,22 @@ export function buildLinksForTarget(nodes, metadata, target) {
     nodesByTitle.set(key, matches);
   }
 
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
   for (const node of nodes) {
     const sourceKey = `node:${node.id}`;
-    for (const label of extractLinks(metadata[node.id]?.description || "")) {
-      const matches = nodesByTitle.get(normalize(label)) || [];
-      const destinationKey = matches.length === 1
-        ? `node:${matches[0].id}`
-        : `virtual:${normalize(label)}`;
-      if (sourceKey === selectedKey) links.add(label);
+    const entry = metadata[node.id] || {};
+    const references = new Map((entry.linkReferences || []).map((reference) => [
+      referenceKey(reference.label, reference.occurrence), reference.targetId
+    ]));
+    for (const link of parseLinkOccurrences(entry.description || "")) {
+      const targetId = references.get(referenceKey(link.label, link.occurrence));
+      const targetNode = nodesById.get(targetId);
+      const matches = nodesByTitle.get(normalize(link.label)) || [];
+      const destinationKey = targetNode
+        ? `node:${targetNode.id}`
+        : targetId ? `virtual:${normalize(link.label)}`
+          : matches.length === 1 ? `node:${matches[0].id}` : `virtual:${normalize(link.label)}`;
+      if (sourceKey === selectedKey) links.add(link.label);
       if (destinationKey === selectedKey) links.add(node.title);
     }
   }

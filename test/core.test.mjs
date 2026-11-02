@@ -8,6 +8,13 @@ import {
   childNodes,
   buildLinkGraph,
   buildLinksForTarget,
+  metadataEntryForDescription,
+  mergeRenamedLinksIntoEditedDescription,
+  migrateMetadataLinkReferences,
+  renameLinkedReferences,
+  renameMetadataLinks,
+  resolveLinkReferences,
+  resolveLinkedLabel,
   isImeKeyEvent,
   isBookmarkletUrl,
   bookmarkletSource,
@@ -296,6 +303,146 @@ test("フォルダへの順リンクと被リンクを生成する", () => {
   };
   assert.deepEqual(buildLinksForTarget(nodes, metadata, { type: "folder", node: folder }), ["ChatGPT"]);
   assert.deepEqual(buildLinkGraph(nodes, metadata).get("node:f"), ["ChatGPT"]);
+});
+
+test("既存説明文では一意なリンクだけをノードIDへ移行する", () => {
+  const nodes = [
+    { id: "bookmark", type: "bookmark", title: "GitHub", url: "https://github.com" },
+    { id: "folder", type: "folder", title: "開発", url: "" },
+    { id: "duplicate", type: "folder", title: "GitHub", url: "" }
+  ];
+  const migration = migrateMetadataLinkReferences({
+    source: { bookmarkId: "source", description: "[開発] [GitHub] [未解決]", updatedAt: 1 }
+  }, nodes);
+  assert.equal(migration.changed, true);
+  assert.deepEqual(migration.metadata.source.linkReferences, [
+    { label: "開発", occurrence: 0, targetId: "folder" }
+  ]);
+  assert.equal(migration.metadata.source.description, "[開発] [GitHub] [未解決]");
+});
+
+test("ノード名称変更でIDが一致するリンク記法だけを更新する", () => {
+  const metadata = {
+    a: metadataEntryForDescription("a", "通常文の開発ツール\n[開発ツール]\n[開発ツール]\n[ 変更しない ]", [
+      { id: "target", type: "folder", title: "開発ツール", url: "" }
+    ]),
+    b: metadataEntryForDescription("b", "参照 [開発ツール]", [
+      { id: "target", type: "folder", title: "開発ツール", url: "" }
+    ])
+  };
+  const renamed = renameMetadataLinks(metadata, "target", "Development Tools");
+  assert.equal(
+    renamed.metadata.a.description,
+    "通常文の開発ツール\n[Development Tools]\n[Development Tools]\n[ 変更しない ]"
+  );
+  assert.equal(renamed.metadata.b.description, "参照 [Development Tools]");
+  assert.equal(renamed.changes.length, 2);
+  assert.deepEqual(renamed.metadata.a.linkReferences, [
+    { label: "Development Tools", occurrence: 0, targetId: "target" },
+    { label: "Development Tools", occurrence: 1, targetId: "target" }
+  ]);
+  const target = { id: "target", type: "folder", title: "Development Tools", url: "" };
+  const sources = [
+    target,
+    { id: "a", type: "bookmark", title: "参照元A", url: "https://a.example" },
+    { id: "b", type: "bookmark", title: "参照元B", url: "https://b.example" }
+  ];
+  assert.deepEqual(
+    buildLinksForTarget(sources, renamed.metadata, { type: "folder", node: target }),
+    ["参照元A", "参照元B"]
+  );
+  assert.deepEqual(searchNodes(sources, renamed.metadata, "Development Tools").map(({ id }) => id), ["target", "a", "b"]);
+});
+
+test("曖昧リンクと未解決リンクは名称変更で更新しない", () => {
+  const metadata = {
+    source: { bookmarkId: "source", description: "[GitHub] [仮想]", updatedAt: 1, linkReferences: [] }
+  };
+  const renamed = renameMetadataLinks(metadata, "target", "New GitHub");
+  assert.equal(renamed.metadata.source.description, "[GitHub] [仮想]");
+  assert.deepEqual(renamed.changes, []);
+});
+
+test("確定済みIDは同名ノードが増えてもLinksの参照先を維持する", () => {
+  const target = { id: "target", type: "folder", title: "開発", url: "" };
+  const duplicate = { id: "duplicate", type: "bookmark", title: "開発", url: "https://example.com" };
+  const source = { id: "source", type: "bookmark", title: "参照元", url: "https://source.example" };
+  const entry = metadataEntryForDescription("source", "[開発]", [target, source]);
+  assert.deepEqual(
+    buildLinksForTarget([target, duplicate, source], { source: entry }, { type: "folder", node: target }),
+    ["参照元"]
+  );
+  assert.deepEqual(
+    buildLinksForTarget([target, duplicate, source], { source: entry }, { type: "bookmark", node: duplicate }),
+    []
+  );
+  assert.deepEqual(resolveLinkedLabel("開発", entry, [target, duplicate, source]), {
+    type: "folder",
+    node: target
+  });
+});
+
+test("確定済みリンク先が削除されても同名ノードへ自動付け替えしない", () => {
+  const remaining = { id: "remaining", type: "folder", title: "開発", url: "" };
+  const source = { id: "source", type: "bookmark", title: "参照元", url: "https://source.example" };
+  const entry = {
+    bookmarkId: "source",
+    description: "[開発]",
+    linkReferences: [{ label: "開発", occurrence: 0, targetId: "deleted" }]
+  };
+  assert.deepEqual(resolveLinkedLabel("開発", entry, [remaining, source]), {
+    type: "virtual",
+    title: "開発",
+    matches: []
+  });
+  assert.deepEqual(
+    buildLinksForTarget([remaining, source], { source: entry }, { type: "folder", node: remaining }),
+    []
+  );
+  assert.deepEqual(resolveLinkReferences("[開発]", [remaining, source], entry.linkReferences), entry.linkReferences);
+});
+
+test("連続した名称変更でも同じノードIDへ追従する", () => {
+  const nodes = [{ id: "target", type: "bookmark", title: "A", url: "https://example.com" }];
+  const initial = { source: metadataEntryForDescription("source", "[A]", nodes) };
+  const first = renameMetadataLinks(initial, "target", "B").metadata;
+  const second = renameMetadataLinks(first, "target", "C").metadata;
+  assert.equal(second.source.description, "[C]");
+  assert.deepEqual(second.source.linkReferences, [{ label: "C", occurrence: 0, targetId: "target" }]);
+  assert.equal(second.source.revision, 3);
+});
+
+test("編集中の文章へ名称変更を統合して通常入力を維持する", () => {
+  const references = [{ label: "旧名", occurrence: 0, targetId: "target" }];
+  const merged = mergeRenamedLinksIntoEditedDescription(
+    "[旧名]を参照",
+    "追記した文章\n[旧名]を参照",
+    references,
+    "target",
+    "新名"
+  );
+  assert.equal(merged.description, "追記した文章\n[新名]を参照");
+  assert.equal(merged.conflict, false);
+});
+
+test("編集中に同名リンクが増減した場合は自動統合せず競合にする", () => {
+  const references = [{ label: "旧名", occurrence: 0, targetId: "target" }];
+  const merged = mergeRenamedLinksIntoEditedDescription(
+    "[旧名]を参照",
+    "[旧名]を追加\n[旧名]を参照",
+    references,
+    "target",
+    "新名"
+  );
+  assert.equal(merged.description, "[旧名]を追加\n[旧名]を参照");
+  assert.equal(merged.conflict, true);
+});
+
+test("URLだけの変更ではリンク参照を変更しない", () => {
+  const references = resolveLinkReferences("[対象]", [
+    { id: "target", type: "bookmark", title: "対象", url: "https://old.example" }
+  ]);
+  assert.deepEqual(references, [{ label: "対象", occurrence: 0, targetId: "target" }]);
 });
 
 test("説明文の行頭空白を箇条書き階層として解析する", () => {

@@ -1,4 +1,4 @@
-export const METADATA_SCHEMA_VERSION = 1;
+export const METADATA_SCHEMA_VERSION = 2;
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);

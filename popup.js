@@ -6,12 +6,13 @@ import {
   bookmarkletSource,
   isBookmarkletUrl,
   parseDescriptionLines,
-  resolveLinkTarget,
+  mergeRenamedLinksIntoEditedDescription,
+  resolveLinkedLabel,
   searchBookmarks,
   searchNodes
 } from "./core.mjs";
 import { createDescriptionEditor } from "./editor.mjs";
-import { readMetadata, writeMetadata } from "./storage.mjs";
+import { readMetadata } from "./storage.mjs";
 
 const RESULT_RENDER_BATCH_SIZE = 100;
 
@@ -171,6 +172,7 @@ function renderLinks() {
   const previewMetadata = { ...metadata };
   if (selectedBookmark) {
     previewMetadata[selectedBookmark.id] = {
+      ...metadata[selectedBookmark.id],
       bookmarkId: selectedBookmark.id,
       description: elements.description.value,
       updatedAt: Date.now()
@@ -260,6 +262,7 @@ function ensureDescriptionEditor() {
       const currentMetadata = { ...metadata };
       if (selectedBookmark) {
         currentMetadata[selectedBookmark.id] = {
+          ...metadata[selectedBookmark.id],
           bookmarkId: selectedBookmark.id,
           description: elements.description.value,
           updatedAt: Date.now()
@@ -364,7 +367,8 @@ async function navigateTo(target) {
 }
 
 async function followLink(title) {
-  await navigateTo(resolveLinkTarget(title, nodes));
+  const entry = selectedBookmark ? metadata[selectedBookmark.id] : null;
+  await navigateTo(resolveLinkedLabel(title, entry, nodes));
 }
 
 async function closeDetail() {
@@ -476,18 +480,23 @@ async function saveDescription() {
   saving = true;
   const bookmarkId = selectedBookmark.id;
   const description = elements.description.value;
-  if (description) {
-    metadata[bookmarkId] = {
-      bookmarkId,
-      description,
-      updatedAt: Date.now()
-    };
-  } else {
-    delete metadata[bookmarkId];
-  }
-
   try {
-    await writeMetadata(chrome.storage.local, metadata);
+    const response = await chrome.runtime.sendMessage({
+      type: "saveMetadataEntry",
+      nodeId: bookmarkId,
+      description,
+      baseRevision: metadata[bookmarkId]?.revision || 0
+    });
+    if (response?.conflict) {
+      if (response.entry) metadata[bookmarkId] = response.entry;
+      if (selectedBookmark?.id === bookmarkId) {
+        elements.saveStatus.textContent = "名称変更との競合を確認してください";
+      }
+      return;
+    }
+    if (!response?.ok) throw new Error("save failed");
+    if (response.entry) metadata[bookmarkId] = response.entry;
+    else delete metadata[bookmarkId];
     if (selectedBookmark?.id === bookmarkId) elements.saveStatus.textContent = "保存済み";
   } catch {
     if (selectedBookmark?.id === bookmarkId) elements.saveStatus.textContent = "未保存";
@@ -498,6 +507,44 @@ async function saveDescription() {
       await saveDescription();
     }
   }
+}
+
+function applyLinkedNodeRename(message) {
+  for (const change of message.changes || []) {
+    metadata[change.sourceId] = {
+      ...metadata[change.sourceId],
+      description: change.afterDescription,
+      linkReferences: change.linkReferences,
+      updatedAt: change.updatedAt,
+      revision: change.revision
+    };
+    if (selectedBookmark?.id !== change.sourceId) continue;
+    const current = elements.description.value;
+    const merged = mergeRenamedLinksIntoEditedDescription(
+      change.beforeDescription,
+      current,
+      change.beforeLinkReferences,
+      message.targetId,
+      message.title
+    );
+    if (merged.changed) {
+      elements.description.value = merged.description;
+      metadata[change.sourceId] = {
+        ...metadata[change.sourceId],
+        description: merged.description,
+        linkReferences: merged.linkReferences
+      };
+      if (descriptionEditor) descriptionEditor.setValue(merged.description);
+      renderDescription();
+      renderLinks();
+      if (current !== change.beforeDescription) scheduleSave();
+      else elements.saveStatus.textContent = "リンク名を更新しました";
+    } else if (merged.conflict) {
+      elements.saveStatus.textContent = "名称変更との競合を確認してください";
+    }
+  }
+  if (!selectedBookmark) renderLinks();
+  if (!elements.listView.hidden) renderResults();
 }
 
 function scheduleSave() {
@@ -521,6 +568,16 @@ async function refreshBookmarks() {
   const tree = await chrome.bookmarks.getTree();
   nodes = flattenNodes(tree);
   bookmarks = nodes.filter(({ type }) => type === "bookmark");
+  if (selectedBookmark) {
+    const latest = bookmarks.find(({ id }) => id === selectedBookmark.id);
+    if (latest) {
+      selectedBookmark = latest;
+      selectedTarget = { type: "bookmark", node: latest };
+      if (elements.titleEditor.hidden) elements.title.textContent = latest.title;
+      if (elements.url.readOnly) elements.url.value = displayUrl(latest.url);
+      renderLinks();
+    }
+  }
   if (!elements.listView.hidden) renderResults();
 }
 
@@ -575,6 +632,10 @@ for (const event of [
 ]) {
   event.addListener(refreshBookmarks);
 }
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "linkedNodeRenamed") applyLinkedNodeRename(message);
+});
 
 loadData()
   .then(() => {
